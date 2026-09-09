@@ -5,7 +5,6 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C.svg?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![Transformers](https://img.shields.io/badge/%F0%9F%A4%97%20Transformers-4.30+-yellow?style=for-the-badge)](https://huggingface.co/docs/transformers)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.30+-FF4B4B.svg?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
 
 > **Live Production Demo:** [https://modear-healthclaimbert.hf.space/](https://modear-healthclaimbert.hf.space/)  
 > **Model Checkpoints & Space:** [Hugging Face (ModeAR/healthclaimbert)](https://huggingface.co/spaces/ModeAR/healthclaimbert)  
@@ -222,7 +221,7 @@ model = AutoModelForSequenceClassification.from_pretrained(model_id)
 
 ---
 
-## 📄 License & Attribution
+## 👤 Author & Contact
 
-This project is licensed under the **MIT License**.  
-Developed and maintained by **Modar Riba** ([@MODARriba](https://github.com/MODARriba)).
+Developed and maintained by **Modar Riba** ([@MODARriba](https://github.com/MODARriba)).  
+📧 **Email:** ribamodar@gmail.com
