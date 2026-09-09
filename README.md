@@ -8,14 +8,14 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
 
 > **Live Production Demo:** [https://modear-healthclaimbert.hf.space/](https://modear-healthclaimbert.hf.space/)  
-> **Model Checkpoints:** [Hugging Face Hub (ModeAR/healthclaimbert)](https://huggingface.co/spaces/ModeAR/healthclaimbert)  
+> **Model Checkpoints & Space:** [Hugging Face (ModeAR/healthclaimbert)](https://huggingface.co/spaces/ModeAR/healthclaimbert)  
 > **Engineering Lead:** Modar Riba ([@MODARriba](https://github.com/MODARriba))
 
 ---
 
 ## 🎯 Executive Summary & Engineering Impact
 
-In public health communication and clinical decision-support, algorithmic verification of health claims is a safety-critical challenge. Misinformation spreads through subtle adversarial phrasing, exaggerated therapeutic claims, and false clinical advice that traditional n-gram models fail to detect.
+In public health communication and clinical decision-support, automated verification of medical claims is a safety-critical challenge. Misinformation spreads through subtle adversarial phrasing, exaggerated therapeutic claims, and false clinical advice that traditional n-gram models fail to detect.
 
 **ClaimCheck AI** is an end-to-end natural language processing system engineered to detect, classify, and audit health misinformation at scale. By fine-tuning domain-specialized biomedical language models (**PubMedBERT**, **BioBERT**) and pairing them with a **calibrated multi-model consensus engine**, the system achieves **75.63% test accuracy** and **79.89% precision** on a rigorously curated held-out test benchmark ($n = 1,317$).
 
@@ -25,6 +25,38 @@ In public health communication and clinical decision-support, algorithmic verifi
 - **Consensus Voting**: Multi-model consensus achieved the top benchmark scores across **Macro-F1 (0.7470)** and **Misinformation-F1 (0.7049)**.
 - **Systematic 8-Bucket Error Profiling**: Conducted failure-mode taxonomy to uncover model disagreement patterns, blind spots, and linguistic edge cases before deployment.
 - **Cloud Microservice Deployment**: Production-ready, containerized Streamlit application featuring sub-second single-claim classification, comparative explainability, and streaming batch CSV processing.
+
+---
+
+## 🚀 Live Interactive Demo
+
+The system is deployed as a cloud microservice on Hugging Face Spaces and is **publicly accessible 24/7**. Anyone can test and audit claims without creating an account or running code locally:
+
+<div align="center">
+
+[![Launch Live Demo](https://img.shields.io/badge/▶%20Launch%20Live%20App-modear--healthclaimbert.hf.space-2ea44f?style=for-the-badge&logo=rocket&logoColor=white)](https://modear-healthclaimbert.hf.space/)
+&nbsp;&nbsp;
+[![View Space on Hugging Face](https://img.shields.io/badge/🤗%20HuggingFace%20Space-ModeAR%2Fhealthclaimbert-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)](https://huggingface.co/spaces/ModeAR/healthclaimbert)
+
+</div>
+
+### 🧪 Try It Yourself: Benchmark Sample Claims
+You can copy-paste and verify any of these claims directly in the web application:
+
+| Claim Category | Sample Claim to Test | Expected Verdict | Primary Indicator |
+|:---|:---|:---:|:---|
+| **Pseudoscience / Cancer Cure** | *"Drinking lemon water every morning alkalizes your body and completely cures cancer."* | 🔴 **Misinformation** | Flags absolute cure claims lacking clinical trial evidence. |
+| **Public Health Consensus** | *"Regular aerobic physical activity and a balanced diet reduce the long-term risk of cardiovascular disease."* | 🟢 **Reliable** | Matches CDC/WHO clinical guidance and preventive evidence. |
+| **Vaccine Skepticism** | *"COVID-19 vaccines alter human genomic DNA and contain microchips."* | 🔴 **Misinformation** | Strong consensus detection across both PubMedBERT & BioBERT. |
+| **Nutritional Guidance** | *"Vitamin D3 supplementation may help support immune function during respiratory viral infections."* | 🟢 **Reliable** | Recognized as cautious, evidence-supported medical wording. |
+
+### 🛠️ Interactive Capabilities in the Demo:
+- **Tab 1: Claim Checker** — Real-time classification using the best-performing model, with confidence meters, class probability breakdowns, and rationale explanations.
+- **Tab 2: Model Comparison** — Side-by-side inference pitting TF-IDF, BioBERT, and PubMedBERT against each other to visualize model agreement and divergence.
+- **Tab 3: Batch Inference** — Upload any CSV or TXT file of claims to audit up to 200 claims in one run, download predictions as CSV, and inspect confidence histograms.
+- **Tab 4: Performance Dashboard** — Live telemetry of held-out test metrics ($n = 1,317$), dynamic 2x2 confusion matrices, and the 8-bucket error distribution.
+
+> **ℹ️ Cloud Availability & Cold Starts**: The live application runs in a containerized environment. If the container has been idle and enters a sleeping state, accessing either link will automatically wake the container (~30–45 seconds boot time) with full functionality restored for all public visitors.
 
 ---
 
@@ -111,17 +143,6 @@ To ensure production safety beyond aggregate accuracy metrics, the system evalua
 | `biobert_only` | **57** | **4.3%** | Nuanced health phrasing identified solely by BioBERT embeddings. |
 | `tfidf_pubmed_only` | **54** | **4.1%** | Biomedical entity alignment matched by PubMed vocabulary. |
 | `pubmed_only` | **51** | **3.9%** | Technical biomedical nomenclature verified exclusively by PubMedBERT. |
-
----
-
-## 🖥️ Production Application Features (`ClaimCheck AI`)
-
-The deployed Streamlit platform serves four core operational workflows:
-
-1. **⚡ Real-Time Claim Verification**: Immediate classification of arbitrary claims with confidence calibration, raw softmax probabilities, and automated linguistic evidence checks.
-2. **⚖️ Multi-Model Consensus View**: Side-by-side comparative inspection showing predictions and confidence scores across all three architectures simultaneously.
-3. **📁 High-Throughput Batch Auditing**: Streamlined processing of CSV/TXT files (up to 200 claims per run) with downloadable prediction reports and confidence distribution histograms.
-4. **📊 Real-Time Performance Dashboard**: Live telemetry displaying the complete evaluation matrix, dynamic confusion matrices ($n=1,317$), and error bucket distribution charts.
 
 ---
 
