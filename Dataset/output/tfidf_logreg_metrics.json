@@ -1,0 +1,40 @@
+{
+  "model": "TF-IDF + Logistic Regression",
+  "text_column": "model_text",
+  "train_rows": 9708,
+  "dev_rows": 1338,
+  "test_rows": 1317,
+  "curated_train_repeat": 4,
+  "dev_metrics": {
+    "split": "dev",
+    "accuracy": 0.7227204783258595,
+    "precision": 0.7808564231738035,
+    "recall": 0.758873929008568,
+    "f1": 0.7697082557417753,
+    "macro_precision": 0.7093620351163135,
+    "macro_recall": 0.7124504002048597,
+    "macro_f1": 0.710675724115019,
+    "misinformation_precision": 0.6378676470588235,
+    "misinformation_recall": 0.6660268714011516,
+    "misinformation_f1": 0.6516431924882629,
+    "reliable_precision": 0.7808564231738035,
+    "reliable_recall": 0.758873929008568,
+    "reliable_f1": 0.7697082557417753
+  },
+  "test_metrics": {
+    "split": "test",
+    "accuracy": 0.7205770690964313,
+    "precision": 0.7932960893854749,
+    "recall": 0.7208121827411168,
+    "f1": 0.7553191489361702,
+    "macro_precision": 0.7136197585030536,
+    "macro_recall": 0.720519512920653,
+    "macro_f1": 0.7148277160610055,
+    "misinformation_precision": 0.6339434276206323,
+    "misinformation_recall": 0.720226843100189,
+    "misinformation_f1": 0.6743362831858407,
+    "reliable_precision": 0.7932960893854749,
+    "reliable_recall": 0.7208121827411168,
+    "reliable_f1": 0.7553191489361702
+  }
+}

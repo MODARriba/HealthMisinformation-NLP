@@ -1,0 +1,22 @@
+{
+  "raw_rows": 14422,
+  "clean_binary_rows": 12231,
+  "by_dataset_raw": {
+    "fakehealth": 2156,
+    "healthfact": 12266
+  },
+  "by_dataset_clean": {
+    "fakehealth": 2156,
+    "healthfact": 10075
+  },
+  "label_binary_raw": {
+    "0": 4689,
+    "1": 7542,
+    "": 2191
+  },
+  "label_binary_clean": {
+    "0": 4689,
+    "1": 7542
+  },
+  "healthfact_missing_binary": 2191
+}

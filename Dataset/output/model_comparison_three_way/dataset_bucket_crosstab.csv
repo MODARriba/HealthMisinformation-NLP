@@ -1,0 +1,4 @@
+dataset,all_correct,all_wrong,biobert_only,biobert_pubmed_only,pubmed_only,tfidf_biobert_only,tfidf_only,tfidf_pubmed_only
+curated_health_claims,4,1,0,1,0,0,0,0
+fakehealth,98,56,25,39,19,37,28,22
+healthfact,654,89,32,74,32,32,42,32

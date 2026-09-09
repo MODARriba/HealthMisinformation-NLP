@@ -1,0 +1,6 @@
+text,label,confidence,prob_misinfo,prob_reliable,decision_source,votes
+Regular physical activity reduces the risk of heart disease.,reliable,1.0,0.066,0.934,"Majority Vote (0 misinformation, 3 reliable)",TF-IDF + Logistic Regression=reliable (80.76%); BioBERT=reliable (99.46%); PubMedBERT=reliable (99.99%)
+Vaccines cause autism in children.,misinformation,1.0,0.9345,0.0655,"Majority Vote (3 misinformation, 0 reliable)",TF-IDF + Logistic Regression=misinformation (83.97%); BioBERT=misinformation (96.43%); PubMedBERT=misinformation (99.94%)
+5G towers spread COVID-19 through electromagnetic waves.,misinformation,1.0,0.9332,0.0668,"Majority Vote (3 misinformation, 0 reliable)",TF-IDF + Logistic Regression=misinformation (83.58%); BioBERT=misinformation (96.43%); PubMedBERT=misinformation (99.95%)
+COVID-19 vaccines reduce the risk of severe illness.,reliable,1.0,0.1506,0.8494,"Majority Vote (0 misinformation, 3 reliable)",TF-IDF + Logistic Regression=reliable (55.98%); BioBERT=reliable (98.85%); PubMedBERT=reliable (99.98%)
+Eating a teaspoon of turmeric daily cures all cancers.,misinformation,1.0,0.9614,0.0386,"Majority Vote (3 misinformation, 0 reliable)",TF-IDF + Logistic Regression=misinformation (91.50%); BioBERT=misinformation (96.97%); PubMedBERT=misinformation (99.95%)

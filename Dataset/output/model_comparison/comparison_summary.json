@@ -1,0 +1,20 @@
+{
+  "best_model_by_test_f1": "BioBERT",
+  "tfidf_test_accuracy": 0.7205770690964313,
+  "biobert_test_accuracy": 0.7562642369020501,
+  "tfidf_test_f1": 0.7553191489361702,
+  "biobert_test_f1": 0.7969639468690702,
+  "f1_gain_biobert_over_tfidf": 0.04164479793289999,
+  "bucket_counts": {
+    "both_correct": 825,
+    "both_wrong": 197,
+    "biobert_only_correct": 171,
+    "tfidf_only_correct": 124
+  },
+  "qualitative_csvs": {
+    "biobert_only_correct": "C:\\Users\\ribam\\Desktop\\Reseach\\Dataset\\output\\model_comparison\\biobert_only_correct_examples.csv",
+    "tfidf_only_correct": "C:\\Users\\ribam\\Desktop\\Reseach\\Dataset\\output\\model_comparison\\tfidf_only_correct_examples.csv",
+    "both_wrong": "C:\\Users\\ribam\\Desktop\\Reseach\\Dataset\\output\\model_comparison\\both_wrong_examples.csv",
+    "both_correct": "C:\\Users\\ribam\\Desktop\\Reseach\\Dataset\\output\\model_comparison\\both_correct_examples.csv"
+  }
+}

@@ -1,0 +1,3 @@
+label,biobert_only_correct,both_correct,both_wrong,tfidf_only_correct
+0,59,307,89,74
+1,112,518,108,50

@@ -1,0 +1,6 @@
+{
+  "recommended_sleep_s": 1.05,
+  "mean_latency_s": 0.755,
+  "all_languages_ok": true,
+  "model": "sarvam-translate:v1"
+}

@@ -1,0 +1,4 @@
+dataset,n,tfidf_accuracy,biobert_accuracy,pubmed_accuracy,majority_accuracy
+curated_health_claims,6,0.6667,0.8333,0.8333,0.8333
+fakehealth,324,0.571,0.6142,0.5494,0.6049
+healthfact,987,0.77,0.8024,0.8024,0.8024

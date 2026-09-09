@@ -1,0 +1,71 @@
+Research Paper
+-----------------------------------------------------------------------------------------------------------------------------------
+TOPIC - Detection Of Health-Related  Misinformation Using NLP
+
+Description
+
+Health-related misinformation can negatively impact public understanding and
+decision-making. This project focuses on detecting misleading or false health-related
+news articles using NLP techniques.
+Students will frame the problem as a text classification task and analyze linguistic
+and semantic patterns present in reliable and unreliable health information.
+
+Core Tasks
+• Text preprocessing and feature extraction
+• Training and evaluation of classification models
+• Analysis of misclassified health claims
+
+Possible Datasets
+• Health misinformation datasets (English)
+• Publicly available fact-checking datasets
+
+Future Scope
+• Claim-level health information verification
+• Integration with trusted medical knowledge sources
+-------------------------------------------------------------------------------------------------------------------------------------
+Keywords - 
+
+- “Health misinformation detection using NLP”
+
+- “Fake health news classification”
+
+- “Claim verification in health domain”
+
+- “Transformer models for medical text classification”
+
+- “Explainable AI for misinformation detection”
+-----------------------------------------------------------------------------------------------------------------------------------
+DataSet i can use - 
+
+🟢 PubHealth
+
+Type: Claim-level health misinformation
+Labels: True / False / Mixture
+Best for: Research & academic projects
+
+🟢 FakeHealth
+
+Type: Health news articles
+Labels: Real / Fake
+Best for: News-based misinformation
+
+🟢 CoAID
+
+Type: COVID-19 misinformation
+Includes: News, claims, social media posts
+
+🟢 HealthFact
+
+Type: Verified health claims
+Focus: Fact-checking	
+
+🟢 LIAR (Health subset)
+
+Type: Short factual claims
+Labels: Multiple truth levels
+
+🟢 COVID-19 Fake News Dataset
+
+Type: Social media + news
+Focus: Pandemic misinformation
+-------------------------------------------------------------------------------------------------------------------------------------------

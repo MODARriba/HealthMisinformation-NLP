@@ -1,0 +1,42 @@
+{
+  "recommended_decision_rule": "Majority Vote",
+  "metrics_source": "recalculated_from_prediction_csv",
+  "best_model_by_test_f1": "BioBERT",
+  "best_model_by_macro_f1": "Majority Vote",
+  "best_model_by_misinformation_f1": "Majority Vote",
+  "test_f1_scores": {
+    "TF-IDF + Logistic Regression": 0.755319,
+    "BioBERT": 0.796964,
+    "PubMedBERT": 0.777053,
+    "Majority Vote": 0.789062
+  },
+  "macro_f1_scores": {
+    "TF-IDF + Logistic Regression": 0.714828,
+    "BioBERT": 0.74606,
+    "PubMedBERT": 0.733072,
+    "Majority Vote": 0.74699
+  },
+  "misinformation_f1_scores": {
+    "TF-IDF + Logistic Regression": 0.674336,
+    "BioBERT": 0.695157,
+    "PubMedBERT": 0.689091,
+    "Majority Vote": 0.704918
+  },
+  "majority_vote": {
+    "accuracy": 0.753986,
+    "macro_f1": 0.74699,
+    "misinformation_f1": 0.704918,
+    "reliable_f1": 0.789062
+  },
+  "bucket_counts": {
+    "all_correct": 756,
+    "tfidf_biobert_only": 69,
+    "tfidf_pubmed_only": 54,
+    "biobert_pubmed_only": 114,
+    "tfidf_only": 70,
+    "biobert_only": 57,
+    "pubmed_only": 51,
+    "all_wrong": 146
+  },
+  "total_test_examples": 1317
+}

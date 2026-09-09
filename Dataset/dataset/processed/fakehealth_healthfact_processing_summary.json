@@ -1,0 +1,24 @@
+{
+  "raw_rows": 14422,
+  "processed_rows": 12273,
+  "curated_rows_added": 42,
+  "dropped_missing_binary": 2191,
+  "dataset_counts_processed": {
+    "healthfact": 10075,
+    "fakehealth": 2156,
+    "curated_health_claims": 42
+  },
+  "label_counts_processed": {
+    "1": 7563,
+    "0": 4710
+  },
+  "split_counts_processed": {
+    "train": 8109,
+    "story": 1564,
+    "dev": 1015,
+    "test": 993,
+    "release": 592
+  },
+  "model_text_column": "title plus text when the title adds extra context; otherwise text only",
+  "curated_note": "curated_health_claims is a small transparent augmentation/challenge set for plain-English public-health claims. Keep it disclosed separately in reporting."
+}

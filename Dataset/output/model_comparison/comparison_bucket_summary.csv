@@ -1,0 +1,5 @@
+bucket,count,percent
+both_correct,825,62.64
+both_wrong,197,14.96
+biobert_only_correct,171,12.98
+tfidf_only_correct,124,9.42

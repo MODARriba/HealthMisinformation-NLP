@@ -1,0 +1,6 @@
+,text_length_chars,text_length_chars,text_length_chars,text_length_chars,text_length_words,text_length_words,text_length_words,text_length_words
+,mean,median,min,max,mean,median,min,max
+dataset,,,,,,,,
+curated_health_claims,57.11904761904762,56.0,30,85,8.619047619047619,8.5,4,13
+fakehealth,4194.373840445269,3970.5,102,29247,667.7694805194806,628.0,18,4275
+healthfact,82.7159305210918,65.0,26,435,13.112754342431762,10.0,3,82

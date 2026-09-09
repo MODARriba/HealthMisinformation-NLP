@@ -1,0 +1,24 @@
+{
+  "rows": 12273,
+  "dataset_counts": {
+    "healthfact": 10075,
+    "fakehealth": 2156,
+    "curated_health_claims": 42
+  },
+  "label_counts": {
+    "1": 7563,
+    "0": 4710
+  },
+  "split_counts": {
+    "train": 8109,
+    "story": 1564,
+    "dev": 1015,
+    "test": 993,
+    "release": 592
+  },
+  "avg_words_by_dataset": {
+    "curated_health_claims": 8.62,
+    "fakehealth": 667.77,
+    "healthfact": 13.11
+  }
+}

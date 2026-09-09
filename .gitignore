@@ -1,0 +1,64 @@
+# ==============================================================================
+# Large Model Weights, Checkpoints & Training Artifacts
+# ==============================================================================
+# Model weights (.safetensors, .bin, .joblib) exceed GitHub 100MB file limit.
+# Pre-trained models are hosted on Hugging Face:
+# https://huggingface.co/spaces/ModeAR/healthclaimbert
+*.pt
+*.bin
+*.safetensors
+*.joblib
+*.pkl
+**/checkpoints/
+**/model/
+**/models/
+models-backup/
+
+# ==============================================================================
+# Compressed Archives & Backup Zips
+# ==============================================================================
+*.rar
+*.zip
+*.7z
+*.tar.gz
+Dataset_Zip/
+
+# ==============================================================================
+# External Literature / Downloaded Copyrighted PDFs
+# ==============================================================================
+Articles/
+
+# ==============================================================================
+# Python & Jupyter Caches
+# ==============================================================================
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.ipynb_checkpoints/
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+ENV/
+
+# ==============================================================================
+# Streamlit & Matplotlib Caches
+# ==============================================================================
+.streamlit/secrets.toml
+**/.matplotlib/
+
+# ==============================================================================
+# OS & Office Temporary Files
+# ==============================================================================
+.DS_Store
+Thumbs.db
+ehthumbs.db
+~$*
+*.tmp
+~WRL*.tmp
+**/.git_gitlab_backup/
