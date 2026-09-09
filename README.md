@@ -145,6 +145,24 @@ To ensure production safety beyond aggregate accuracy metrics, the system evalua
 
 ---
 
+## ⚠️ Current Limitations & Future Roadmap
+
+While the system achieves competitive benchmark performance on verified claims, deploying NLP into real-world healthcare communication surfaces specific data and linguistic constraints.
+
+### 1. Primary Limitation: Dataset Volume & Annotation Scarcity
+- **The Data Ceiling**: The single largest bottleneck in health misinformation detection is the **scarcity of large-scale, high-quality, expert-annotated datasets**.
+- Unlike general NLP tasks with millions of labeled examples, clinical fact-checking benchmarks (such as FakeHealth and HealthFact) are relatively small ($n \approx 1,317$ held-out test cases) due to the immense expert clinician labor required to thoroughly verify medical claims.
+- This constraint limits model exposure to rapidly emerging health myths, regional folk remedies, and adversarial linguistic variations.
+
+### 2. Strategic Engineering Roadmap: Multilingual Expansion
+Healthcare misinformation disproportionately impacts populations communicating in regional and non-English languages. The next architectural phase focuses on scaling language coverage:
+
+- **IndicTrans2 (AI4Bharat)**: Integrate state-of-the-art translation and cross-lingual representation models from AI4Bharat to support end-to-end verification across 22+ scheduled Indian languages.
+- **Sarvam AI (`sarvam-2b`) Pipeline**: Productionize the vernacular translation pipelines developed in exploratory notebooks (`09` through `13`), enabling zero-shot claim verification for regional languages including Hindi, Assamese, Manipuri, and Bodo.
+- **Retrieval-Augmented Verification (RAG)**: Pair classification models with live vector search over PubMed Central (PMC), CDC, and WHO clinical repositories to automatically retrieve and display supporting medical citations alongside each confidence verdict.
+
+---
+
 ## 📁 Repository Organization
 
 ```text
