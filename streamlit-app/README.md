@@ -1,87 +1,52 @@
-# HealthClaimBERT \U0001F9EC
+# ClaimCheck AI - Decision-Support Frontend
 
-Streamlit web app for **health misinformation detection**, built on the models
-fine-tuned in the accompanying Jupyter notebooks (PubMedBERT, BioBERT,
-TF-IDF + Logistic Regression) and evaluated on a combined FakeHealth +
-HealthFact dataset (test set n = 1,311).
+[![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-ClaimCheck%20AI-blue?style=flat-square)](https://modear-healthclaimbert.hf.space/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.30+-FF4B4B.svg?style=flat-square)](https://streamlit.io/)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?style=flat-square)](https://www.python.org/)
 
-## Project layout
+Production Streamlit web interface for **ClaimCheck AI**, an automated clinical NLP platform for health misinformation verification and evidence auditing.
 
-```
-streamlit-app/
-├── app.py                                  # 4-tab Streamlit frontend
-├── requirements.txt
-├── models/                                 # <- copy your trained models here
-│   ├── pubmedbert_fakehealth_healthfact/   #    HF save_pretrained folder
-│   ├── biobert_fakehealth_healthfact/      #    HF save_pretrained folder
-│   └── tfidf_logreg.joblib                 #    scikit-learn pipeline
-├── assets/                                 # confusion matrix PNGs (optional)
-│   ├── tfidf_cm.png
-│   ├── biobert_cm.png
-│   └── pubmedbert_cm.png
-├── data/
-│   ├── comparison_summary.json             # from notebook 07 (optional)
-│   └── eight_bucket.csv                    # bucket,count (optional)
-└── 0X_*.ipynb                              # training & analysis notebooks
-```
+---
 
-The app works even if model files are missing - it shows a friendly warning
-and the Performance Dashboard still renders from embedded thesis metrics.
+## 🛠️ Architecture & Core Workflows
 
-## 1. Export your trained artifacts from Jupyter
+1. **⚡ Claim Checker (Single-Claim Inference)**:
+   - Evaluates input claims against fine-tuned biomedical transformer representations (`PubMedBERT`, `BioBERT`).
+   - Generates confidence ratings, class probability distributions, and domain safety evidence checks.
 
-In the notebooks where the models were trained:
+2. **⚖️ Multi-Model Consensus Engine**:
+   - Executes parallel comparative inference across TF-IDF, BioBERT, and PubMedBERT.
+   - Computes real-time majority consensus votes to mitigate single-model classification bias.
 
-```python
-# Transformers (notebooks 04 and 06)
-model.save_pretrained("models/pubmedbert_fakehealth_healthfact")
-tokenizer.save_pretrained("models/pubmedbert_fakehealth_healthfact")
-# (same for biobert_fakehealth_healthfact)
+3. **📁 High-Throughput Batch Inference**:
+   - Accepts CSV or TXT batch claim files (up to 200 rows per batch).
+   - Generates streaming progress, downloadable prediction reports, and confidence distributions.
 
-# Baseline (notebook 03)
-import joblib
-joblib.dump(pipeline, "models/tfidf_logreg.joblib")
+4. **📊 Performance & Error Profiling Dashboard**:
+   - Displays real-time test-set metrics ($n = 1,317$).
+   - Dynamically visualizes 2x2 confusion matrices and 8-bucket error categorization breakdowns.
 
-# Confusion matrices
-fig.savefig("assets/pubmedbert_cm.png", dpi=150, bbox_inches="tight")
-```
+---
 
-## 2. Add the files to this repo
+## 📈 Test-Set Benchmark Results ($n = 1,317$)
 
-Model weights are large - use **Git LFS**:
+| Model | Architecture | Accuracy | Precision (Rel) | Recall (Rel) | F1-Score (Rel) | Macro-F1 | Misinfo-F1 |
+|:---|:---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **TF-IDF + LogReg** | N-gram Baseline | 72.06% | 0.7933 | 0.7208 | 0.7553 | 0.7148 | 0.6743 |
+| **BioBERT** | Biomedical Transformer | **75.63%** | 0.7945 | **0.7995** | **0.7970** | 0.7461 | 0.6952 |
+| **PubMedBERT** | Domain-Specific (PubMed) | 74.03% | **0.7989** | 0.7563 | 0.7771 | 0.7331 | 0.6891 |
+| **Majority Ensemble**| Consensus Engine | 75.40% | 0.7975 | 0.7805 | 0.7891 | **0.7470** | **0.7049** |
+
+---
+
+## 🚀 Local Deployment
 
 ```bash
-git lfs install
-git lfs track "*.bin" "*.safetensors" "*.joblib" "*.pkl"
-git add .gitattributes models/ assets/ data/
-git commit -m "Add trained model weights and assets"
-git push
-```
-
-## 3. Run the app
-
-```bash
+# 1. Install dependencies
 pip install -r requirements.txt
+
+# 2. Run application
 streamlit run app.py
 ```
 
-## Tabs
-
-1. **Claim Checker** - classify a single claim with the best transformer
-   (auto-selected from `data/comparison_summary.json`, like notebook 08).
-2. **Model Comparison** - run one claim through all three models side by side.
-3. **Batch Inference** - upload a CSV (column `claim`) or TXT (one claim per
-   line, max 200 rows), download results, view a confidence histogram.
-4. **Performance Dashboard** - real thesis metrics, confusion matrices,
-   Plotly radar chart, and the eight-bucket error analysis.
-
-## Test-set results (thesis Chapter 6.2)
-
-| Model        | Accuracy | Precision | Recall | F1     |
-|--------------|----------|-----------|--------|--------|
-| TF-IDF + LR  | 68.73%   | 0.7713    | 0.6790 | 0.7222 |
-| BioBERT      | 73.38%   | 0.7290    | 0.8841 | 0.7991 |
-| PubMedBERT   | 73.84%   | 0.7908    | 0.7656 | 0.7780 |
-
----
-MSc Dissertation \u00b7 Health Misinformation Detection \u00b7 2024-26
+*Note: Pre-trained model weights are hosted on Hugging Face at [`ModeAR/healthclaimbert`](https://huggingface.co/spaces/ModeAR/healthclaimbert).*
