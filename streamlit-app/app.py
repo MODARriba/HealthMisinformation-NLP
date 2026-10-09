@@ -24,6 +24,22 @@ from urllib.parse import urlparse
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
+
+try:
+    from PIL import Image, ImageOps, ImageEnhance
+except ImportError:
+    Image = ImageOps = ImageEnhance = None
+
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
+
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+except ImportError:
+    YouTubeTranscriptApi = None
 
 
 st.set_page_config(page_title="ClaimCheck AI", page_icon="CC", layout="wide")
@@ -1485,6 +1501,60 @@ def inject_css() -> None:
             background: rgba(148, 163, 184, 0.12);
             color: #cbd5e1;
             border: 1px solid rgba(148, 163, 184, 0.25);
+        }
+
+        /* Multimodal & Video Styles */
+        .timestamp-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(38, 208, 195, 0.12);
+            color: #4eedb0 !important;
+            border: 1px solid rgba(38, 208, 195, 0.3);
+            border-radius: 4px;
+            padding: 3px 8px;
+            font-size: 11px;
+            font-weight: 700;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            text-decoration: none !important;
+            transition: all 0.15s ease;
+        }
+        .timestamp-pill:hover {
+            background: rgba(38, 208, 195, 0.28);
+            border-color: #26d0c3;
+            color: #ffffff !important;
+        }
+        .video-meta-box {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin-bottom: 16px;
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+        .video-meta-thumb {
+            width: 140px;
+            height: 82px;
+            object-fit: cover;
+            border-radius: 6px;
+            border: 1px solid var(--line);
+        }
+        .video-meta-info {
+            flex: 1;
+        }
+        .ocr-preview-box {
+            background: #0b1017;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 12px;
+            color: var(--text);
+            max-height: 240px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.5;
         }
 
         @media (max-width: 760px) {
@@ -4192,6 +4262,798 @@ def url_analysis_tab() -> None:
         st.caption("Works on public news articles and blogs. Paywalled or JavaScript-heavy single-page apps can be checked using 'Paste article text'.")
 
 
+# ---------------------------------------------------------------------------
+# Multimodal & Modern Media Ingestion (Video & Image OCR)
+# ---------------------------------------------------------------------------
+
+def extract_youtube_video_id(url_or_id: str) -> str | None:
+    text = (url_or_id or "").strip()
+    if re.fullmatch(r"[a-zA-Z0-9_-]{11}", text):
+        return text
+    patterns = [
+        r"(?:v=|\/v\/|embed\/|shorts\/|youtu\.be\/|\/e\/|watch\?v=)([\w-]{11})",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def format_seconds(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    secs = total % 60
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def fetch_youtube_transcript_snippets(video_id: str, languages: tuple[str, ...] = ("en",)) -> list[dict]:
+    if YouTubeTranscriptApi is None:
+        raise ImportError("youtube-transcript-api is not installed.")
+
+    try:
+        if hasattr(YouTubeTranscriptApi, "get_transcript"):
+            return YouTubeTranscriptApi.get_transcript(video_id, languages=list(languages))
+        else:
+            api = YouTubeTranscriptApi()
+            fetched = api.fetch(video_id, languages=list(languages))
+            if hasattr(fetched, "to_raw_data"):
+                return fetched.to_raw_data()
+            return [{"text": getattr(s, "text", ""), "start": getattr(s, "start", 0.0), "duration": getattr(s, "duration", 0.0)} for s in fetched]
+    except Exception as exc:
+        try:
+            if hasattr(YouTubeTranscriptApi, "list_transcripts"):
+                tlist = YouTubeTranscriptApi.list_transcripts(video_id)
+                for t in tlist:
+                    return t.fetch()
+            else:
+                api = YouTubeTranscriptApi()
+                tlist = api.list(video_id)
+                for t in tlist:
+                    fetched = t.fetch()
+                    if hasattr(fetched, "to_raw_data"):
+                        return fetched.to_raw_data()
+                    return [{"text": getattr(s, "text", ""), "start": getattr(s, "start", 0.0), "duration": getattr(s, "duration", 0.0)} for s in fetched]
+        except Exception:
+            pass
+        raise exc
+
+
+def chunk_youtube_transcript(snippets: list, max_words_per_chunk: int = 30) -> list[dict]:
+    statements: list[dict] = []
+    current_words: list[str] = []
+    current_start: float = 0.0
+    current_duration: float = 0.0
+
+    for snip in snippets:
+        text = getattr(snip, "text", None) if hasattr(snip, "text") else snip.get("text", "")
+        start = getattr(snip, "start", None) if hasattr(snip, "start") else snip.get("start", 0.0)
+        dur = getattr(snip, "duration", None) if hasattr(snip, "duration") else snip.get("duration", 0.0)
+
+        cleaned = re.sub(r"\[.*?\]", "", text).strip()
+        if not cleaned:
+            continue
+
+        words = cleaned.split()
+        if not current_words:
+            current_start = float(start)
+            current_duration = float(dur)
+            current_words.extend(words)
+        else:
+            current_words.extend(words)
+            current_duration = (float(start) + float(dur)) - current_start
+
+        full_text = " ".join(current_words)
+        if any(cleaned.endswith(p) for p in [".", "!", "?"]) or len(current_words) >= max_words_per_chunk:
+            statements.append({
+                "statement": full_text,
+                "start": current_start,
+                "duration": current_duration,
+                "timestamp": format_seconds(current_start),
+            })
+            current_words = []
+
+    if current_words:
+        statements.append({
+            "statement": " ".join(current_words),
+            "start": current_start,
+            "duration": current_duration,
+            "timestamp": format_seconds(current_start),
+        })
+
+    return statements
+
+
+def perform_image_ocr(image_bytes_or_pil) -> tuple[str, str]:
+    if Image is None:
+        return "", "Pillow (PIL) is not installed."
+
+    try:
+        if isinstance(image_bytes_or_pil, (bytes, bytearray)):
+            pil_img = Image.open(io.BytesIO(image_bytes_or_pil))
+        elif hasattr(image_bytes_or_pil, "read"):
+            pil_img = Image.open(image_bytes_or_pil)
+        else:
+            pil_img = image_bytes_or_pil
+
+        gray = ImageOps.grayscale(pil_img)
+        enhanced = ImageEnhance.Contrast(gray).enhance(1.8)
+
+        if pytesseract is not None:
+            try:
+                extracted = pytesseract.image_to_string(enhanced)
+                cleaned = "\n".join(line.strip() for line in extracted.splitlines() if line.strip())
+                if cleaned:
+                    return cleaned, "Server-side Tesseract OCR Engine"
+            except Exception:
+                pass
+
+        return "", "Tesseract OCR binary not detected on server. Use the In-Browser Instant OCR Scanner below or paste text directly."
+    except Exception as exc:
+        return "", f"Image parsing error: {exc}"
+
+
+def generate_pdf_video_audit(video_id: str, report: dict) -> bytes:
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        fig = plt.figure(figsize=(8.5, 11), facecolor="#ffffff")
+        fig.text(0.08, 0.94, "CLAIMCHECK AI | MULTIMODAL VIDEO AUDIT REPORT", fontsize=14, weight="bold", color="#0f172a")
+        fig.text(0.08, 0.92, "Healthcare Misinformation Decision Support System", fontsize=9.5, color="#64748b")
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        fig.text(0.92, 0.94, f"AUDIT DATE: {now_str}", fontsize=8.5, color="#64748b", ha="right")
+        line = plt.Line2D([0.08, 0.92], [0.905, 0.905], color="#cbd5e1", lw=1.2, transform=fig.transFigure)
+        fig.add_artist(line)
+
+        meta_y = 0.875
+        fig.text(0.08, meta_y, "TARGET VIDEO URL:", fontsize=8.5, weight="bold", color="#334155")
+        fig.text(0.26, meta_y, f"https://www.youtube.com/watch?v={video_id}", fontsize=8.5, color="#0f172a")
+
+        fig.text(0.08, meta_y - 0.022, "VIDEO TIMELINE:", fontsize=8.5, weight="bold", color="#334155")
+        fig.text(0.26, meta_y - 0.022, f"Duration: {report.get('duration_str', 'N/A')} | Spoken Words: {report.get('words', 0):,}", fontsize=8.5, color="#0f172a")
+
+        fig.text(0.08, meta_y - 0.044, "RISK ASSESSMENT:", fontsize=8.5, weight="bold", color="#334155")
+        risk = report.get("risk", {})
+        risk_level = risk.get("level", "Low")
+        risk_color = "#dc2626" if risk_level == "High" else ("#d97706" if risk_level == "Elevated" else "#16a34a")
+        fig.text(0.26, meta_y - 0.044, f"{risk_level.upper()} - {risk.get('verdict', 'Audited')}", fontsize=9, weight="bold", color=risk_color)
+
+        claims = report.get("claims", [])
+        fig.text(0.08, 0.77, f"AUDITED SPOKEN STATEMENTS ({len(claims)} Extracted)", fontsize=10, weight="bold", color="#1e293b")
+        ax_claims = fig.add_axes([0.08, 0.22, 0.84, 0.52])
+        ax_claims.axis("off")
+        claim_table_rows = []
+        for c in claims[:12]:
+            stmt_short = textwrap.shorten(c["statement"], width=52, placeholder="...")
+            claim_table_rows.append([
+                c.get("timestamp", "00:00"),
+                stmt_short,
+                c.get("verdict", "Reliable"),
+                f"{c.get('confidence', 0.0):.1%}",
+                c.get("decision_model", "Ensemble"),
+            ])
+        if claim_table_rows:
+            ctbl = ax_claims.table(
+                cellText=claim_table_rows,
+                colLabels=["Timestamp", "Spoken Statement Excerpt", "Verdict", "Conf", "Decision Model"],
+                loc="center",
+                cellLoc="left",
+            )
+            ctbl.auto_set_font_size(False)
+            ctbl.set_fontsize(7.5)
+            ctbl.scale(1, 1.4)
+
+        fig.text(0.08, 0.045, "Disclaimer: Automated decision-support signal generated by clinical NLP models. Not medical advice.", fontsize=7, color="#94a3b8")
+        fig.text(0.92, 0.045, "ClaimCheck AI | Page 1 of 1", fontsize=7, color="#94a3b8", ha="right")
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+    return buf.getvalue()
+
+
+def generate_pdf_infographic_audit(report: dict) -> bytes:
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        fig = plt.figure(figsize=(8.5, 11), facecolor="#ffffff")
+        fig.text(0.08, 0.94, "CLAIMCHECK AI | INFOGRAPHIC OCR AUDIT REPORT", fontsize=14, weight="bold", color="#0f172a")
+        fig.text(0.08, 0.92, "Healthcare Misinformation Decision Support System", fontsize=9.5, color="#64748b")
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        fig.text(0.92, 0.94, f"AUDIT DATE: {now_str}", fontsize=8.5, color="#64748b", ha="right")
+        line = plt.Line2D([0.08, 0.92], [0.905, 0.905], color="#cbd5e1", lw=1.2, transform=fig.transFigure)
+        fig.add_artist(line)
+
+        meta_y = 0.875
+        fig.text(0.08, meta_y, "TARGET MEDIA:", fontsize=8.5, weight="bold", color="#334155")
+        fig.text(0.26, meta_y, report.get("title", "Social Media Graphic / Screenshot"), fontsize=8.5, color="#0f172a")
+
+        fig.text(0.08, meta_y - 0.022, "OCR WORDS EXTRACTED:", fontsize=8.5, weight="bold", color="#334155")
+        fig.text(0.26, meta_y - 0.022, f"{report.get('words', 0):,} words", fontsize=8.5, color="#0f172a")
+
+        fig.text(0.08, meta_y - 0.044, "RISK ASSESSMENT:", fontsize=8.5, weight="bold", color="#334155")
+        risk = report.get("risk", {})
+        risk_level = risk.get("level", "Low")
+        risk_color = "#dc2626" if risk_level == "High" else ("#d97706" if risk_level == "Elevated" else "#16a34a")
+        fig.text(0.26, meta_y - 0.044, f"{risk_level.upper()} - {risk.get('verdict', 'Audited')}", fontsize=9, weight="bold", color=risk_color)
+
+        claims = report.get("claims", [])
+        fig.text(0.08, 0.77, f"AUDITED HEALTH CLAIMS ({len(claims)} Extracted)", fontsize=10, weight="bold", color="#1e293b")
+        ax_claims = fig.add_axes([0.08, 0.22, 0.84, 0.52])
+        ax_claims.axis("off")
+        claim_table_rows = []
+        for c in claims[:12]:
+            stmt_short = textwrap.shorten(c["statement"], width=52, placeholder="...")
+            claim_table_rows.append([
+                f"#{c.get('position', 1)}",
+                stmt_short,
+                c.get("verdict", "Reliable"),
+                f"{c.get('confidence', 0.0):.1%}",
+                c.get("decision_model", "Ensemble"),
+            ])
+        if claim_table_rows:
+            ctbl = ax_claims.table(
+                cellText=claim_table_rows,
+                colLabels=["#", "Extracted Statement Excerpt", "Verdict", "Conf", "Decision Model"],
+                loc="center",
+                cellLoc="left",
+            )
+            ctbl.auto_set_font_size(False)
+            ctbl.set_fontsize(7.5)
+            ctbl.scale(1, 1.4)
+
+        fig.text(0.08, 0.045, "Disclaimer: Automated decision-support signal generated by clinical NLP models. Not medical advice.", fontsize=7, color="#94a3b8")
+        fig.text(0.92, 0.045, "ClaimCheck AI | Page 1 of 1", fontsize=7, color="#94a3b8", ha="right")
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+    return buf.getvalue()
+
+
+def render_browser_ocr_widget() -> None:
+    html_code = """
+    <div style="font-family: Inter, system-ui, sans-serif; background: #141a22; border: 1.5px dashed #242d36; border-radius: 8px; padding: 16px; text-align: center; color: #e7edf5;">
+        <div style="font-size: 13px; font-weight: 700; margin-bottom: 6px; color: #26d0c3;">⚡ In-Browser Instant OCR Scanner (Tesseract.js)</div>
+        <div style="font-size: 11px; color: #93a1b1; margin-bottom: 12px;">Processes images 100% locally in your browser. Extracts text from screenshots, WhatsApp forwards & Instagram stories.</div>
+        <input type="file" id="ocr_file" accept="image/*" style="font-size: 11px; color: #93a1b1; margin-bottom: 10px;" />
+        <div id="ocr_status" style="font-size: 11px; color: #f6c238; margin-bottom: 8px; font-weight: 600;"></div>
+        <textarea id="ocr_output" rows="4" style="width: 100%; box-sizing: border-box; background: #0b1017; border: 1px solid #242d36; border-radius: 6px; color: #e7edf5; font-size: 11px; padding: 8px; resize: vertical;" placeholder="Extracted text appears here. Copy and paste into the audit box below..."></textarea>
+        <button id="copy_btn" style="margin-top: 8px; background: #26d0c3; color: #0b1017; border: none; border-radius: 4px; padding: 6px 14px; font-size: 11px; font-weight: 700; cursor: pointer;">📋 Copy Extracted Text</button>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script>
+        const fileInput = document.getElementById('ocr_file');
+        const statusDiv = document.getElementById('ocr_status');
+        const outputArea = document.getElementById('ocr_output');
+        const copyBtn = document.getElementById('copy_btn');
+
+        fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            statusDiv.innerText = "⏳ Initializing in-browser OCR scanner...";
+            try {
+                const worker = await Tesseract.createWorker('eng');
+                statusDiv.innerText = "🔍 Recognizing text in image...";
+                const ret = await worker.recognize(file);
+                outputArea.value = ret.data.text.trim();
+                statusDiv.innerText = `✅ Recognition complete (Confidence: ${Math.round(ret.data.confidence)}%)`;
+                await worker.terminate();
+            } catch (err) {
+                statusDiv.innerText = "❌ OCR error: " + err.message;
+            }
+        });
+
+        copyBtn.addEventListener('click', () => {
+            if (outputArea.value) {
+                navigator.clipboard.writeText(outputArea.value);
+                copyBtn.innerText = "✅ Copied to Clipboard!";
+                setTimeout(() => { copyBtn.innerText = "📋 Copy Extracted Text"; }, 2000);
+            }
+        });
+    </script>
+    """
+    components.html(html_code, height=230)
+
+
+def multimodal_media_tab() -> None:
+    primary_model = best_accuracy_model()
+    section_heading(
+        "Multimodal & Modern Media Ingestion",
+        "Audit viral social media graphics (OCR) and YouTube video/podcast transcripts with timestamped claims",
+    )
+
+    media_mode = st.radio(
+        "Input Format",
+        ["🎥 YouTube Video & Podcast Transcript", "📸 Screenshot & Infographic OCR Scanner"],
+        horizontal=True,
+        key="multimodal_mode_selector",
+    )
+
+    if media_mode == "🎥 YouTube Video & Podcast Transcript":
+        left, right = st.columns([2.2, 1.1], gap="large")
+        with left:
+            with st.container(border=True):
+                st.markdown('<div class="label" style="margin-bottom: 6px;">YouTube Video or Podcast Link</div>', unsafe_allow_html=True)
+                yt_url = st.text_input(
+                    "Video URL",
+                    key="yt_url_input",
+                    placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/...",
+                    label_visibility="collapsed",
+                )
+                btn_col, sample_col, reset_col = st.columns([1.2, 1.4, 0.8])
+                run_yt = btn_col.button("Audit Video", type="primary", key="yt_run_btn")
+                load_sample = sample_col.button("Try Sample Video", key="yt_sample_btn")
+                reset_yt = reset_col.button("Reset", key="yt_reset_btn")
+
+                if load_sample:
+                    st.session_state.yt_url_input = "https://www.youtube.com/watch?v=M7lc1UVf-VE"
+                    st.session_state.pop("yt_audit_report", None)
+                    st.rerun()
+
+                if reset_yt:
+                    st.session_state.pop("yt_url_input", None)
+                    st.session_state.pop("yt_audit_report", None)
+                    st.rerun()
+
+            if run_yt:
+                if not yt_url.strip():
+                    st.info("Please enter a YouTube link or click 'Try Sample Video'.")
+                else:
+                    video_id = extract_youtube_video_id(yt_url)
+                    if not video_id:
+                        st.error("Invalid YouTube URL or video ID. Please check the link and try again.")
+                    else:
+                        with st.spinner("Fetching subtitles and temporal alignment..."):
+                            try:
+                                snippets = fetch_youtube_transcript_snippets(video_id)
+                            except Exception as exc:
+                                st.error(f"Could not retrieve video captions: {exc}. Ensure the video has public English captions enabled.")
+                                snippets = None
+
+                        if snippets:
+                            progress = st.progress(0.0, text="Decomposing dialogue into statements...")
+                            chunks = chunk_youtube_transcript(snippets, max_words_per_chunk=32)
+                            audited_claims = []
+                            for idx, c in enumerate(chunks[:35], start=1):
+                                progress.progress(idx / min(len(chunks), 35), text=f"Auditing statement {idx}/{min(len(chunks), 35)}...")
+                                stmt_text = c["statement"]
+                                res = predict_ensemble(stmt_text)
+                                if res is None:
+                                    continue
+                                _, _, _, votes = res
+                                selected, sel_model, _, verified_reason = select_decision_vote(votes, primary_model, stmt_text)
+                                if selected is None:
+                                    continue
+                                label = str(selected.get("label", ""))
+                                available = [v for v in votes if v.get("available")]
+                                audited_claims.append({
+                                    "position": idx,
+                                    "timestamp": c["timestamp"],
+                                    "start": c["start"],
+                                    "statement": stmt_text,
+                                    "verdict": label.title(),
+                                    "confidence": round(float(selected.get("confidence", 0.0)), 4),
+                                    "agreement": f"{sum(v.get('label') == label for v in available)}/{len(available)}",
+                                    "decision_model": sel_model,
+                                    "safety_check": misinformation_safety_reason(stmt_text) or "",
+                                    "note": verified_reason or "",
+                                })
+                            progress.empty()
+
+                            total_secs = max([c["start"] + c["duration"] for c in chunks], default=0.0)
+                            words_count = sum(len(c["statement"].split()) for c in chunks)
+                            flagged = [row for row in audited_claims if row["verdict"] == "Misinformation"]
+                            safety_hits = [row for row in audited_claims if row.get("safety_check")]
+
+                            risk_score = 0
+                            reasons = []
+                            if audited_claims:
+                                share = len(flagged) / len(audited_claims)
+                                if share >= 0.35:
+                                    risk_score += 3
+                                    reasons.append(f"{len(flagged)} of {len(audited_claims)} statements flagged as misinformation ({share:.0%}).")
+                                elif share > 0.1:
+                                    risk_score += 1
+                                    reasons.append(f"{len(flagged)} of {len(audited_claims)} statements flagged as misinformation ({share:.0%}).")
+                                else:
+                                    reasons.append(f"Majority of spoken dialogue ({len(audited_claims) - len(flagged)}/{len(audited_claims)}) is classified as reliable.")
+                            if safety_hits:
+                                risk_score += 2
+                                reasons.append(f"{len(safety_hits)} statements triggered high-risk health safety alerts.")
+
+                            if risk_score >= 3:
+                                risk_level, risk_verdict = "High", "Likely Misinformation"
+                            elif risk_score >= 1:
+                                risk_level, risk_verdict = "Elevated", "Mixed Signals - Review Dialogue"
+                            else:
+                                risk_level, risk_verdict = "Low", "Likely Reliable"
+
+                            st.session_state.yt_audit_report = {
+                                "video_id": video_id,
+                                "duration_str": format_seconds(total_secs),
+                                "words": words_count,
+                                "claims": audited_claims,
+                                "risk": {"level": risk_level, "verdict": risk_verdict, "score": risk_score, "reasons": reasons},
+                            }
+
+            if "yt_audit_report" in st.session_state:
+                rep = st.session_state.yt_audit_report
+                vid = rep["video_id"]
+                risk = rep["risk"]
+                claims = rep["claims"]
+                flagged = [row for row in claims if row["verdict"] == "Misinformation"]
+
+                card_class = {"High": "bad", "Elevated": "neutral", "Low": "good"}[risk["level"]]
+                label_class = {"High": "status-misinfo", "Elevated": "", "Low": "status-reliable"}[risk["level"]]
+                reasons_html = "".join(f"<li>{html.escape(r)}</li>" for r in risk["reasons"])
+
+                st.markdown(
+                    f'<div class="video-meta-box">'
+                    f'<img src="https://img.youtube.com/vi/{html.escape(vid)}/hqdefault.jpg" class="video-meta-thumb" alt="Video Thumbnail" />'
+                    f'<div class="video-meta-info">'
+                    f'<div style="font-size: 13px; font-weight: 700; color: #e7edf5; margin-bottom: 4px;">YouTube Video Audit: {html.escape(vid)}</div>'
+                    f'<div style="font-size: 11px; color: var(--muted);">'
+                    f'Duration: <strong>{rep["duration_str"]}</strong> &middot; Spoken Words: <strong>{rep["words"]:,}</strong> &middot; '
+                    f'<a href="https://www.youtube.com/watch?v={html.escape(vid)}" target="_blank" rel="noopener noreferrer" style="color: #26d0c3;">Open on YouTube &rarr;</a>'
+                    f'</div></div></div>',
+                    unsafe_allow_html=True,
+                )
+
+                st.markdown(
+                    f'<div class="prediction-card {card_class}">'
+                    f'<p class="prediction-label {label_class}">{html.escape(risk["verdict"])}</p>'
+                    f'<p class="small-muted">Risk level: <strong>{risk["level"]}</strong> &middot; Source: YouTube Video Audio Stream</p>'
+                    f'<div class="rationale"><strong>Why this result?</strong><ul>{reasons_html}</ul></div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                metric_cards = [
+                    ("Video Duration", rep["duration_str"], "Total runtime"),
+                    ("Dialogue Audited", f"{len(claims)}", "Extracted statement chunks"),
+                    ("Flagged Claims", f"{len(flagged)}", f"{len(flagged)/len(claims):.0%}" if claims else "0%"),
+                    ("Spoken Words", f"{rep['words']:,}", "Transcribed vocabulary"),
+                ]
+                st.markdown(
+                    '<div class="evidence-grid">'
+                    + "".join(
+                        f'<div class="evidence-card"><div class="evidence-label">{html.escape(label)}</div>'
+                        f'<div class="evidence-value">{html.escape(value)}</div>'
+                        f'<div class="evidence-note">{html.escape(note)}</div></div>'
+                        for label, value, note in metric_cards
+                    )
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+
+                if flagged:
+                    st.markdown('<p class="eyebrow">Flagged Video Statements & Triggers</p>', unsafe_allow_html=True)
+                    for row in sorted(flagged, key=lambda item: item["confidence"], reverse=True)[:4]:
+                        tok_attr = explain_tokens(row["statement"])
+                        trigger_pills = ""
+                        if tok_attr.get("top_misinfo"):
+                            pills = " ".join(
+                                f'<span class="tok-pill pill-misinfo">{html.escape(w)} ({score:+.2f})</span>'
+                                for w, score, _ in tok_attr["top_misinfo"][:4]
+                            )
+                            trigger_pills = f'<div class="tok-pill-group" style="margin-top: 0.45rem;"><span class="tok-pill-label">Triggers:</span>{pills}</div>'
+                        jump_url = f"https://www.youtube.com/watch?v={vid}&t={int(row['start'])}s"
+                        st.markdown(
+                            f'<div class="example-card"><div class="example-status status-misinfo">'
+                            f'<a href="{html.escape(jump_url, quote=True)}" target="_blank" rel="noopener noreferrer" class="timestamp-pill">▶ {row["timestamp"]}</a> '
+                            f'Misinformation &middot; {row["confidence"]:.0%}</div>'
+                            f'<p>{html.escape(row["statement"])}</p>'
+                            f'{trigger_pills}</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                top_claim = flagged[0]["statement"] if flagged else (claims[0]["statement"] if claims else "")
+                if top_claim:
+                    render_scientific_grounding(top_claim)
+
+                if claims:
+                    table_rows = []
+                    for c in claims:
+                        table_rows.append({
+                            "Timestamp": c["timestamp"],
+                            "Statement": c["statement"],
+                            "Verdict": c["verdict"],
+                            "Confidence": c["confidence"],
+                            "Agreement": c["agreement"],
+                            "Model": c["decision_model"],
+                        })
+                    c_frame = pd.DataFrame(table_rows)
+                    with st.expander(f"All timestamped video statements ({len(claims)})", expanded=not flagged):
+                        st.dataframe(
+                            c_frame,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Timestamp": st.column_config.TextColumn("Time", width="small"),
+                                "Statement": st.column_config.TextColumn("Dialogue Statement", width="large"),
+                                "Verdict": st.column_config.TextColumn("Verdict"),
+                                "Confidence": st.column_config.ProgressColumn("Confidence", min_value=0.0, max_value=1.0, format="%.2f"),
+                                "Agreement": st.column_config.TextColumn("Model agreement"),
+                                "Model": st.column_config.TextColumn("Decision model"),
+                            },
+                        )
+
+                    d_col1, d_col2 = st.columns(2)
+                    with d_col1:
+                        st.download_button(
+                            "📥 Download Video Audit as CSV",
+                            c_frame.to_csv(index=False),
+                            file_name=f"youtube_{vid}_audit.csv",
+                            mime="text/csv",
+                            key="yt_dl_csv",
+                            use_container_width=True,
+                        )
+                    with d_col2:
+                        pdf_v = generate_pdf_video_audit(vid, rep)
+                        st.download_button(
+                            "📄 Download Video Audit PDF Report",
+                            pdf_v,
+                            file_name=f"ClaimCheckAI_YouTube_{vid}_Audit.pdf",
+                            mime="application/pdf",
+                            key="yt_dl_pdf",
+                            use_container_width=True,
+                        )
+
+        with right:
+            render_example_cards()
+            st.markdown('<p class="eyebrow" style="margin-top: 1.5rem;">Multimodal Architecture</p>', unsafe_allow_html=True)
+            v_steps = [
+                ("1 · Audio Stream Subtitle Ingestion", "Fetches caption streams via YouTube API without downloading heavy video files."),
+                ("2 · Temporal Sentence Alignment", "Aggregates speech fragments into timestamped dialogue chunks [MM:SS]."),
+                ("3 · Deep NLP Ensemble Scoring", "Each statement is independently verified by BioBERT and PubMedBERT."),
+                ("4 · PubMed Evidence Grounding", "Retrieves peer-reviewed clinical studies matching flagged claims."),
+            ]
+            for title, note in v_steps:
+                st.markdown(
+                    f'<div class="example-card"><div class="example-status">{html.escape(title)}</div>'
+                    f"<p>{html.escape(note)}</p></div>",
+                    unsafe_allow_html=True,
+                )
+
+    else:
+        left, right = st.columns([2.2, 1.1], gap="large")
+        with left:
+            with st.container(border=True):
+                st.markdown('<div class="label" style="margin-bottom: 6px;">Upload Social Media Flyer, Screenshot, or Infographic</div>', unsafe_allow_html=True)
+                uploaded_img = st.file_uploader(
+                    "Upload Image",
+                    type=["png", "jpg", "jpeg", "webp"],
+                    key="ocr_uploader",
+                    label_visibility="collapsed",
+                )
+                sample_pills = st.columns([1.2, 1.2, 1.2])
+                s1 = sample_pills[0].button("WhatsApp Cancer Myth", key="ocr_s1")
+                s2 = sample_pills[1].button("Instagram Garlic Protocol", key="ocr_s2")
+                s3 = sample_pills[2].button("Twitter Vaccine Flyer", key="ocr_s3")
+
+                if s1:
+                    st.session_state.ocr_text_content = (
+                        "URGENT HEALTH ALERT: Dr. Gupta from AIIMS confirms that drinking boiling hot lemon water with baking soda "
+                        "every morning destroys 100% of cancer cells within 48 hours. Cancer is not a disease, it is just vitamin deficiency. "
+                        "Pharmaceutical companies are hiding this miracle cure. Forward to all groups to save lives!"
+                    )
+                    st.session_state.ocr_img_title = "WhatsApp Forward (Cancer Cure Myth)"
+                    st.session_state.pop("ocr_audit_report", None)
+                    st.rerun()
+                if s2:
+                    st.session_state.ocr_text_content = (
+                        "NATURAL IMMUNITY PROTOCOL: Big Pharma won't tell you this. 10 drops of colloidal silver mixed with raw crushed garlic "
+                        "and oregano oil cures viral pneumonia and destroys coronavirus spike proteins instantly. No vaccines needed! Protect your family naturally."
+                    )
+                    st.session_state.ocr_img_title = "Instagram Flyer (Colloidal Silver Protocol)"
+                    st.session_state.pop("ocr_audit_report", None)
+                    st.rerun()
+                if s3:
+                    st.session_state.ocr_text_content = (
+                        "BREAKING STUDY: mRNA COVID-19 vaccines alter human genomic DNA permanently and cause cellular magnet resonance. "
+                        "Unvaccinated individuals are suffering from spike protein shedding. Detox immediately using chlorine dioxide and pine needle tea."
+                    )
+                    st.session_state.ocr_img_title = "Twitter Graphic (Vaccine Shedding & Magnetism)"
+                    st.session_state.pop("ocr_audit_report", None)
+                    st.rerun()
+
+                if uploaded_img is not None:
+                    with st.spinner("Extracting text from image..."):
+                        extracted_txt, ocr_note = perform_image_ocr(uploaded_img)
+                        if extracted_txt:
+                            st.session_state.ocr_text_content = extracted_txt
+                            st.session_state.ocr_img_title = uploaded_img.name
+                        else:
+                            st.caption(f"💡 {ocr_note}")
+
+                render_browser_ocr_widget()
+
+                text_val = st.text_area(
+                    "Extracted Text (Review & Edit Before Audit)",
+                    value=st.session_state.get("ocr_text_content", ""),
+                    height=130,
+                    key="ocr_text_editor",
+                )
+
+                audit_ocr_btn = st.button("Audit Extracted Graphic Claims", type="primary", key="ocr_audit_run")
+
+            if audit_ocr_btn:
+                if not text_val.strip():
+                    st.info("Please upload an image, scan via browser OCR, or choose a sample graphic.")
+                else:
+                    sentences = [s.strip() for s in SENTENCE_SPLIT_RE.split(text_val) if len(s.strip()) > 15]
+                    if not sentences:
+                        sentences = [text_val.strip()]
+
+                    progress = st.progress(0.0, text="Auditing graphic text with NLP models...")
+                    ocr_claims = []
+                    for idx, sent in enumerate(sentences[:15], start=1):
+                        progress.progress(idx / min(len(sentences), 15), text=f"Auditing claim {idx}/{min(len(sentences), 15)}...")
+                        res = predict_ensemble(sent)
+                        if res is None:
+                            continue
+                        _, _, _, votes = res
+                        selected, sel_model, _, verified_reason = select_decision_vote(votes, primary_model, sent)
+                        if selected is None:
+                            continue
+                        label = str(selected.get("label", ""))
+                        available = [v for v in votes if v.get("available")]
+                        ocr_claims.append({
+                            "position": idx,
+                            "statement": sent,
+                            "verdict": label.title(),
+                            "confidence": round(float(selected.get("confidence", 0.0)), 4),
+                            "agreement": f"{sum(v.get('label') == label for v in available)}/{len(available)}",
+                            "decision_model": sel_model,
+                            "safety_check": misinformation_safety_reason(sent) or "",
+                            "note": verified_reason or "",
+                        })
+                    progress.empty()
+
+                    flagged = [row for row in ocr_claims if row["verdict"] == "Misinformation"]
+                    safety_hits = [row for row in ocr_claims if row.get("safety_check")]
+                    risk_score = 0
+                    reasons = []
+                    if ocr_claims:
+                        share = len(flagged) / len(ocr_claims)
+                        if share >= 0.4:
+                            risk_score += 3
+                            reasons.append(f"{len(flagged)} of {len(ocr_claims)} extracted graphic statements flagged as misinformation ({share:.0%}).")
+                        elif share > 0.1:
+                            risk_score += 1
+                            reasons.append(f"{len(flagged)} of {len(ocr_claims)} extracted graphic statements flagged as misinformation ({share:.0%}).")
+                        else:
+                            reasons.append(f"Majority of graphic statements ({len(ocr_claims) - len(flagged)}/{len(ocr_claims)}) classified as reliable.")
+                    if safety_hits:
+                        risk_score += 2
+                        reasons.append(f"{len(safety_hits)} statements match known hazardous medical pseudoscience.")
+
+                    if risk_score >= 3:
+                        risk_level, risk_verdict = "High", "Likely Misinformation"
+                    elif risk_score >= 1:
+                        risk_level, risk_verdict = "Elevated", "Mixed Signals - Verify Claims"
+                    else:
+                        risk_level, risk_verdict = "Low", "Likely Reliable"
+
+                    st.session_state.ocr_audit_report = {
+                        "title": st.session_state.get("ocr_img_title", "Uploaded Graphic / Flyer"),
+                        "words": len(text_val.split()),
+                        "claims": ocr_claims,
+                        "risk": {"level": risk_level, "verdict": risk_verdict, "score": risk_score, "reasons": reasons},
+                    }
+
+            if "ocr_audit_report" in st.session_state:
+                rep = st.session_state.ocr_audit_report
+                risk = rep["risk"]
+                claims = rep["claims"]
+                flagged = [row for row in claims if row["verdict"] == "Misinformation"]
+
+                card_class = {"High": "bad", "Elevated": "neutral", "Low": "good"}[risk["level"]]
+                label_class = {"High": "status-misinfo", "Elevated": "", "Low": "status-reliable"}[risk["level"]]
+                reasons_html = "".join(f"<li>{html.escape(r)}</li>" for r in risk["reasons"])
+
+                st.markdown(
+                    f'<div class="prediction-card {card_class}">'
+                    f'<p class="prediction-label {label_class}">{html.escape(risk["verdict"])}</p>'
+                    f'<p class="small-muted">Risk level: <strong>{risk["level"]}</strong> &middot; Target: {html.escape(rep["title"])}</p>'
+                    f'<div class="rationale"><strong>Why this result?</strong><ul>{reasons_html}</ul></div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                metric_cards = [
+                    ("Graphic Verdict", risk["verdict"], f"Risk score: {risk['score']}"),
+                    ("Extracted Statements", f"{len(claims)}", "Decomposed claims"),
+                    ("Flagged Misinformation", f"{len(flagged)}", f"{len(flagged)/len(claims):.0%}" if claims else "0%"),
+                    ("OCR Words", f"{rep['words']:,}", "Recognized vocabulary"),
+                ]
+                st.markdown(
+                    '<div class="evidence-grid">'
+                    + "".join(
+                        f'<div class="evidence-card"><div class="evidence-label">{html.escape(label)}</div>'
+                        f'<div class="evidence-value">{html.escape(value)}</div>'
+                        f'<div class="evidence-note">{html.escape(note)}</div></div>'
+                        for label, value, note in metric_cards
+                    )
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+
+                if flagged:
+                    st.markdown('<p class="eyebrow">Flagged Infographic Statements & Triggers</p>', unsafe_allow_html=True)
+                    for row in sorted(flagged, key=lambda item: item["confidence"], reverse=True)[:4]:
+                        tok_attr = explain_tokens(row["statement"])
+                        trigger_pills = ""
+                        if tok_attr.get("top_misinfo"):
+                            pills = " ".join(
+                                f'<span class="tok-pill pill-misinfo">{html.escape(w)} ({score:+.2f})</span>'
+                                for w, score, _ in tok_attr["top_misinfo"][:4]
+                            )
+                            trigger_pills = f'<div class="tok-pill-group" style="margin-top: 0.45rem;"><span class="tok-pill-label">Triggers:</span>{pills}</div>'
+                        st.markdown(
+                            f'<div class="example-card"><div class="example-status status-misinfo">'
+                            f'Misinformation &middot; {row["confidence"]:.0%}</div>'
+                            f'<p>{html.escape(row["statement"])}</p>'
+                            f'{trigger_pills}</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                top_claim = flagged[0]["statement"] if flagged else (claims[0]["statement"] if claims else "")
+                if top_claim:
+                    render_scientific_grounding(top_claim)
+
+                if claims:
+                    c_frame = pd.DataFrame(claims)
+                    d_col1, d_col2 = st.columns(2)
+                    with d_col1:
+                        st.download_button(
+                            "📥 Download Infographic Audit CSV",
+                            c_frame.to_csv(index=False),
+                            file_name="infographic_claim_audit.csv",
+                            mime="text/csv",
+                            key="ocr_dl_csv",
+                            use_container_width=True,
+                        )
+                    with d_col2:
+                        pdf_bytes = generate_pdf_infographic_audit(rep)
+                        st.download_button(
+                            "📄 Download Fact-Check Report (PDF)",
+                            pdf_bytes,
+                            file_name="ClaimCheckAI_Infographic_Audit.pdf",
+                            mime="application/pdf",
+                            key="ocr_dl_pdf",
+                            use_container_width=True,
+                        )
+
+        with right:
+            render_example_cards()
+            st.markdown('<p class="eyebrow" style="margin-top: 1.5rem;">OCR Ingestion Architecture</p>', unsafe_allow_html=True)
+            o_steps = [
+                ("1 · Dual OCR Processing", "Client-side Tesseract.js ensures instant, zero-server-load OCR directly in the browser, with server-side PyTesseract fallback."),
+                ("2 · Contrast & Grayscale Preprocessing", "Applies PIL adaptive contrast enhancement to clarify compressed social media flyers."),
+                ("3 · Clinical Claim Segmentation", "Extracts distinct health claims and filters irrelevant background chatter."),
+                ("4 · Multi-Model Consensus & PubMed Grounding", "BioBERT and PubMedBERT verify each claim against peer-reviewed literature."),
+            ]
+            for title, note in o_steps:
+                st.markdown(
+                    f'<div class="example-card"><div class="example-status">{html.escape(title)}</div>'
+                    f"<p>{html.escape(note)}</p></div>",
+                    unsafe_allow_html=True,
+                )
+
+
 def model_comparison_tab() -> None:
     section_heading(
         "Model Comparison",
@@ -4497,8 +5359,16 @@ def validation_tab() -> None:
 inject_css()
 render_shell_open()
 
-tab_claim, tab_url, tab_compare, tab_batch, tab_perf, tab_validation = st.tabs(
-    ["Claim Checker", "URL Analysis", "Model Comparison", "Batch Inference", "Performance", "Validation"]
+tab_claim, tab_url, tab_media, tab_compare, tab_batch, tab_perf, tab_validation = st.tabs(
+    [
+        "Claim Checker",
+        "URL Analysis",
+        "Multimodal Scanner",
+        "Model Comparison",
+        "Batch Inference",
+        "Performance",
+        "Validation",
+    ]
 )
 
 with tab_claim:
@@ -4509,6 +5379,11 @@ with tab_claim:
 with tab_url:
     st.markdown('<div class="content">', unsafe_allow_html=True)
     url_analysis_tab()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with tab_media:
+    st.markdown('<div class="content">', unsafe_allow_html=True)
+    multimodal_media_tab()
     st.markdown("</div>", unsafe_allow_html=True)
 
 with tab_compare:
