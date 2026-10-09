@@ -1557,6 +1557,42 @@ def inject_css() -> None:
             line-height: 1.5;
         }
 
+        /* Robustness Lab & Uncertainty Band */
+        .status-inconclusive {
+            color: #f6c238 !important;
+        }
+        .prediction-card.neutral {
+            border-left: 3px solid #f6c238;
+        }
+        .pert-badge-pass {
+            background: rgba(38, 208, 195, 0.15);
+            color: #4eedb0;
+            border: 1px solid rgba(38, 208, 195, 0.35);
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .pert-badge-fail {
+            background: rgba(255, 90, 99, 0.18);
+            color: #ff858c;
+            border: 1px solid rgba(255, 90, 99, 0.4);
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .robustness-score-banner {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 16px 20px;
+            margin-bottom: 18px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
         @media (max-width: 760px) {
             .block-container {
                 max-width: calc(100vw - 24px);
@@ -2314,11 +2350,23 @@ def render_prediction(
     model_name: str | None = None,
     decision_note: str | None = None,
 ) -> None:
-    is_reliable = label.lower() == "reliable"
-    label_text = "Reliable" if is_reliable else "Misinformation"
-    card_class = "good" if is_reliable else "bad"
-    label_class = "status-reliable" if is_reliable else "status-misinfo"
-    explanation = html.escape(prediction_explanation(claim, label))
+    is_inconclusive = label.lower() in ("inconclusive", "uncertain") or (
+        not decision_note and abs(probs.get("misinformation", 0.5) - probs.get("reliable", 0.5)) <= 0.10
+    )
+    if is_inconclusive:
+        label_text = "Inconclusive / Emerging Research"
+        card_class = "neutral"
+        label_class = "status-inconclusive"
+        explanation = (
+            "The ensemble detects borderline clinical evidence with high uncertainty (confidence in the 45%–55% band). "
+            "This statement represents emerging or contested medical research requiring deeper peer-reviewed trials."
+        )
+    else:
+        is_reliable = label.lower() == "reliable"
+        label_text = "Reliable" if is_reliable else "Misinformation"
+        card_class = "good" if is_reliable else "bad"
+        label_class = "status-reliable" if is_reliable else "status-misinfo"
+        explanation = html.escape(prediction_explanation(claim, label))
     rows = []
     is_vote_result = bool(votes)
     for cls, probability in probs.items():
@@ -2629,6 +2677,18 @@ def select_decision_vote(votes: list[dict], default_primary_model: str, claim: s
     if selected.get("override"):
         reason = str(selected.get("override_reason", "context check"))
         return selected, selected_model, f"{selected_model} decision adjusted: {reason}", reason
+
+    probs = selected.get("probs", {})
+    if abs(probs.get("misinformation", 0.5) - probs.get("reliable", 0.5)) <= 0.10:
+        uncertain_vote = dict(selected)
+        uncertain_vote["label"] = "inconclusive"
+        return (
+            uncertain_vote,
+            selected_model,
+            f"Uncertainty Band ({float(selected.get('confidence', 0.0)):.1%}): Inconclusive / Emerging Research",
+            "Borderline prediction within 45%–55% confidence band",
+        )
+
     return (
         selected,
         selected_model,
@@ -3220,6 +3280,45 @@ def render_scientific_grounding(claim: str) -> None:
         )
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def translate_to_english_auto(text: str) -> tuple[str, str, bool]:
+    clean = text.strip()
+    if not clean:
+        return "", "en", False
+
+    has_non_ascii = any(ord(c) > 127 for c in clean)
+    if not has_non_ascii and len(clean.split()) > 1 and all(w.isascii() for w in clean.split()):
+        common_foreign = {"el", "la", "de", "que", "y", "en", "un", "una", "le", "les", "des", "est", "une", "und", "der", "die", "das", "nicht"}
+        first_few = set(clean.lower().split()[:5])
+        if not (first_few & common_foreign):
+            return clean, "en", False
+
+    try:
+        encoded = urllib.parse.quote(clean)
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q={encoded}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (ClaimCheckAI/1.0)"})
+        with urllib.request.urlopen(req, timeout=4.0) as r:
+            data = json.loads(r.read().decode("utf-8"))
+            translated = "".join([item[0] for item in data[0] if item[0]]).strip()
+            detected_lang = data[2] if len(data) > 2 else "en"
+            if detected_lang != "en" and translated.lower() != clean.lower():
+                return translated, detected_lang, True
+            return clean, detected_lang, False
+    except Exception:
+        try:
+            url_mm = f"https://api.mymemory.translated.net/get?q={encoded}&langpair=autodetect|en"
+            req_mm = urllib.request.Request(url_mm, headers={"User-Agent": "ClaimCheckAI/1.0"})
+            with urllib.request.urlopen(req_mm, timeout=3.5) as r_mm:
+                data_mm = json.loads(r_mm.read().decode("utf-8"))
+                trans_mm = data_mm.get("responseData", {}).get("translatedText", clean).strip()
+                if trans_mm and trans_mm.lower() != clean.lower():
+                    return trans_mm, "foreign", True
+        except Exception:
+            pass
+
+    return clean, "en", False
+
+
 def claim_checker_tab() -> None:
     primary_model = best_accuracy_model()
     section_heading(
@@ -3234,10 +3333,10 @@ def claim_checker_tab() -> None:
     with left:
         with st.container(border=True):
             claim = st.text_area(
-                "Enter a health claim to analyse",
+                "Enter a health claim to analyse (Supports English, Hindi, Spanish & global languages)",
                 key="claim_text",
                 height=126,
-                placeholder="e.g. Drinking bleach can cure COVID-19...",
+                placeholder="e.g. Drinking bleach can cure COVID-19 or हल्दी का दूध पीने से कैंसर ठीक होता है...",
             )
             st.caption(f"{len(claim)} chars")
             btn_col, reset_col, _ = st.columns([1, 0.7, 3.2])
@@ -3252,19 +3351,28 @@ def claim_checker_tab() -> None:
             if not claim.strip():
                 st.info("Please enter a claim first.")
             else:
-                scope_notice = health_scope_notice(claim)
+                eval_claim, det_lang, was_translated = translate_to_english_auto(claim.strip())
+                if was_translated:
+                    st.markdown(
+                        f'<div style="background: rgba(38, 208, 195, 0.1); border: 1px solid rgba(38, 208, 195, 0.3); border-radius: 6px; padding: 8px 12px; margin-bottom: 12px; font-size: 12px;">'
+                        f'🌐 <strong>Multilingual Ingestion:</strong> Detected <code>{html.escape(det_lang.upper())}</code> &rarr; Translated for biomedical models: '
+                        f'<em>"{html.escape(eval_claim)}"</em></div>',
+                        unsafe_allow_html=True,
+                    )
+
+                scope_notice = health_scope_notice(eval_claim)
                 if scope_notice:
                     st.session_state.pop("claim_model_signals", None)
                     st.session_state.pop("claim_primary_model", None)
                     render_scope_notice(scope_notice)
                 else:
-                    result = predict_ensemble(claim)
+                    result = predict_ensemble(eval_claim)
                     if result is None:
                         tried = ", ".join(str(path) for path in existing_roots() or LOCAL_MODEL_ROOTS)
                         st.error(f"No model files were available. Checked: {tried}")
                     else:
                         _, _, _, votes = result
-                        selected_vote, selected_model, decision_note, _ = select_decision_vote(votes, primary_model, claim)
+                        selected_vote, selected_model, decision_note, _ = select_decision_vote(votes, primary_model, eval_claim)
                         if selected_vote is None:
                             st.error("No model prediction was available.")
                         else:
@@ -3272,13 +3380,13 @@ def claim_checker_tab() -> None:
                                 selected_vote["label"],
                                 float(selected_vote.get("confidence", 0.0)),
                                 selected_vote.get("probs", {}),
-                                claim,
+                                eval_claim,
                                 model_name=selected_model,
                                 decision_note=decision_note,
                             )
-                            render_token_attribution(claim)
-                            render_scientific_grounding(claim)
-                            pdf_single = generate_pdf_single_claim(claim, selected_vote, selected_model, votes)
+                            render_token_attribution(eval_claim)
+                            render_scientific_grounding(eval_claim)
+                            pdf_single = generate_pdf_single_claim(eval_claim, selected_vote, selected_model, votes)
                             st.download_button(
                                 "📄 Download Claim Fact-Check Audit PDF",
                                 pdf_single,
@@ -5054,6 +5162,302 @@ def multimodal_media_tab() -> None:
                 )
 
 
+# ---------------------------------------------------------------------------
+# Adversarial & Perturbation Robustness Lab
+# ---------------------------------------------------------------------------
+
+ROBUSTNESS_SYNONYM_MAP = {
+    "cancer": ["malignant neoplasms", "carcinoma"],
+    "cure": ["eradicate", "remedy"],
+    "cures": ["eradicates", "remedies", "eliminates"],
+    "cured": ["eradicated", "remedied"],
+    "heart disease": ["cardiovascular disease", "coronary artery disease"],
+    "cardiovascular disease": ["coronary artery disease", "heart disease"],
+    "exercise": ["physical activity", "aerobic training"],
+    "vaccine": ["immunization", "inoculation"],
+    "vaccines": ["immunizations", "inoculations"],
+    "doctor": ["physician", "clinician"],
+    "doctors": ["physicians", "clinicians"],
+    "reduces": ["decreases", "lowers"],
+    "causes": ["triggers", "leads to"],
+    "diet": ["nutritional regimen", "dietary intake"],
+    "prevents": ["protects against", "averts"],
+}
+
+ROBUSTNESS_NEGATION_PAIRS = [
+    (r"\bcures\b", "does not cure"),
+    (r"\bcure\b", "do not cure"),
+    (r"\bcauses\b", "does not cause"),
+    (r"\bcause\b", "do not cause"),
+    (r"\breduces\b", "does not reduce"),
+    (r"\breduce\b", "do not reduce"),
+    (r"\bprevents\b", "does not prevent"),
+    (r"\bprevent\b", "do not prevent"),
+    (r"\bis effective\b", "is not effective"),
+    (r"\bdoes not cure\b", "cures"),
+    (r"\bdoes not cause\b", "causes"),
+    (r"\bdoes not reduce\b", "reduces"),
+]
+
+
+def generate_perturbations(claim: str) -> list[dict]:
+    results = []
+
+    # 1. Negation Inversion
+    negated = None
+    for pattern, replacement in ROBUSTNESS_NEGATION_PAIRS:
+        if re.search(pattern, claim, flags=re.IGNORECASE):
+            negated = re.sub(pattern, replacement, claim, count=1, flags=re.IGNORECASE)
+            break
+    if not negated:
+        if " is " in claim.lower():
+            negated = re.sub(r"\bis\b", "is not", claim, count=1, flags=re.IGNORECASE)
+        elif " can " in claim.lower():
+            negated = re.sub(r"\bcan\b", "cannot", claim, count=1, flags=re.IGNORECASE)
+
+    if negated and negated.lower() != claim.lower():
+        results.append({
+            "category": "Negation Inversion",
+            "perturbed": negated,
+            "target_test": "Polarity Inversion",
+            "expected_behavior": "Verdict Should Flip",
+            "description": "Tests if the model respects logical negation or falls for naive keyword matching.",
+        })
+
+    # 2. Clinical Synonym Replacement
+    synonym_text = claim
+    swapped = False
+    for word, syns in ROBUSTNESS_SYNONYM_MAP.items():
+        if re.search(r"\b" + re.escape(word) + r"\b", synonym_text, flags=re.IGNORECASE):
+            synonym_text = re.sub(r"\b" + re.escape(word) + r"\b", syns[0], synonym_text, count=1, flags=re.IGNORECASE)
+            swapped = True
+            break
+    if swapped:
+        results.append({
+            "category": "Clinical Synonym Swap",
+            "perturbed": synonym_text,
+            "target_test": "Semantic Invariance",
+            "expected_behavior": "Verdict Should Hold",
+            "description": "Substitutes colloquial health terms with formal medical nomenclature.",
+        })
+
+    # 3. Typo / Noise Injection
+    words = claim.split()
+    if len(words) > 3:
+        target_idx = max(1, len(words) // 2)
+        w = words[target_idx]
+        if len(w) > 4:
+            typo_w = w[:2] + w[3] + w[2] + w[4:] if len(w) > 4 else w + "e"
+            typo_words = list(words)
+            typo_words[target_idx] = typo_w
+            results.append({
+                "category": "Typographical Noise",
+                "perturbed": " ".join(typo_words),
+                "target_test": "Token Subword Robustness",
+                "expected_behavior": "Verdict Should Hold",
+                "description": "Simulates adjacent-character transposition and social media spelling noise.",
+            })
+
+    # 4. Epistemic Scientific Hedging
+    hedged = f"Preliminary observational clinical studies suggest that {claim.lower().rstrip('.')}, though further trials are needed."
+    results.append({
+        "category": "Epistemic Hedging",
+        "perturbed": hedged,
+        "target_test": "Evidential Stance Framing",
+        "expected_behavior": "Confidence Shifts Toward Reliable",
+        "description": "Frames the statement with cautious peer-reviewed clinical hedging.",
+    })
+
+    # 5. Absolutist Intensifier
+    intensified = f"Miracle medical breakthrough confirms 100% that {claim.lower().rstrip('.')} without any side effects!"
+    results.append({
+        "category": "Absolutist Intensifier",
+        "perturbed": intensified,
+        "target_test": "Pseudoscience Rhetoric",
+        "expected_behavior": "Confidence Shifts Toward Misinformation",
+        "description": "Injects hyperbolic cure claims and sensationalist rhetoric.",
+    })
+
+    return results
+
+
+def robustness_lab_tab() -> None:
+    primary_model = best_accuracy_model()
+    section_heading(
+        "Adversarial & Perturbation Robustness Lab",
+        "Stress-test biomedical models across syntactic negation, clinical synonyms, typos, and epistemic stance",
+    )
+
+    left, right = st.columns([2.2, 1.1], gap="large")
+    with left:
+        with st.container(border=True):
+            claim_input = st.text_area(
+                "Claim to Stress-Test",
+                key="robustness_claim_input",
+                height=110,
+                placeholder="e.g. Drinking lemon water cures cancer completely...",
+            )
+            sample_cols = st.columns([1.1, 1.3, 1.2])
+            if sample_cols[0].button("Lemon Cancer Cure", key="rob_s1"):
+                st.session_state.robustness_claim_input = "Drinking lemon water cures cancer completely."
+                st.session_state.pop("robustness_report", None)
+                st.rerun()
+            if sample_cols[1].button("Cardiovascular Exercise", key="rob_s2"):
+                st.session_state.robustness_claim_input = "Regular physical exercise reduces the risk of cardiovascular disease."
+                st.session_state.pop("robustness_report", None)
+                st.rerun()
+            if sample_cols[2].button("Vaccine Magnetism", key="rob_s3"):
+                st.session_state.robustness_claim_input = "COVID-19 vaccines alter human DNA and make the body magnetic."
+                st.session_state.pop("robustness_report", None)
+                st.rerun()
+
+            btn_col, reset_col, _ = st.columns([1.4, 0.7, 2.5])
+            run_robust = btn_col.button("Run Robustness Audit", type="primary", key="rob_run_btn")
+            if reset_col.button("Reset", key="rob_reset_btn"):
+                st.session_state.pop("robustness_claim_input", None)
+                st.session_state.pop("robustness_report", None)
+                st.rerun()
+
+        if run_robust:
+            if not claim_input.strip():
+                st.info("Please enter a claim or pick a sample preset above.")
+            else:
+                with st.spinner("Generating adversarial perturbations & evaluating ensemble models..."):
+                    orig_res = predict_ensemble(claim_input.strip())
+                    if orig_res is None:
+                        st.error("Models unavailable.")
+                    else:
+                        _, _, _, orig_votes = orig_res
+                        orig_sel, orig_model, _, _ = select_decision_vote(orig_votes, primary_model, claim_input.strip())
+                        orig_label = str(orig_sel.get("label", "reliable")).title() if orig_sel else "Reliable"
+                        orig_conf = float(orig_sel.get("confidence", 0.0)) if orig_sel else 0.5
+
+                        perturbations = generate_perturbations(claim_input.strip())
+                        rows = []
+                        pass_count = 0
+
+                        for p in perturbations:
+                            pert_text = p["perturbed"]
+                            pert_res = predict_ensemble(pert_text)
+                            if pert_res is None:
+                                continue
+                            _, _, _, p_votes = pert_res
+                            p_sel, _, _, _ = select_decision_vote(p_votes, primary_model, pert_text)
+                            p_label = str(p_sel.get("label", "reliable")).title() if p_sel else "Reliable"
+                            p_conf = float(p_sel.get("confidence", 0.0)) if p_sel else 0.5
+                            conf_delta = p_conf - orig_conf if p_label == orig_label else -(p_conf + orig_conf - 1.0)
+
+                            cat = p["category"]
+                            passed = False
+                            if cat == "Negation Inversion":
+                                passed = (p_label != orig_label) or (orig_conf - p_conf >= 0.20)
+                            elif cat in ("Clinical Synonym Swap", "Typographical Noise"):
+                                passed = (p_label == orig_label)
+                            elif cat == "Epistemic Hedging":
+                                passed = (p_label == "Reliable") or (p_conf <= orig_conf)
+                            elif cat == "Absolutist Intensifier":
+                                passed = (p_label == "Misinformation") or (p_conf >= orig_conf)
+
+                            if passed:
+                                pass_count += 1
+
+                            rows.append({
+                                "category": cat,
+                                "target_test": p["target_test"],
+                                "perturbed": pert_text,
+                                "verdict": p_label,
+                                "confidence": p_conf,
+                                "delta_conf": conf_delta,
+                                "passed": passed,
+                                "expected": p["expected_behavior"],
+                                "description": p["description"],
+                            })
+
+                        robustness_pct = (pass_count / len(rows) * 100) if rows else 100.0
+                        st.session_state.robustness_report = {
+                            "original_claim": claim_input.strip(),
+                            "original_verdict": orig_label,
+                            "original_confidence": orig_conf,
+                            "original_model": orig_model,
+                            "robustness_score": robustness_pct,
+                            "rows": rows,
+                        }
+
+        if "robustness_report" in st.session_state:
+            rep = st.session_state.robustness_report
+            score = rep["robustness_score"]
+            score_color = "#4eedb0" if score >= 75 else ("#fcd34d" if score >= 50 else "#ff858c")
+
+            st.markdown(
+                f'<div class="robustness-score-banner">'
+                f'<div>'
+                f'<div style="font-size: 11px; font-weight: 750; color: var(--muted); text-transform: uppercase;">Adversarial Robustness Resilience</div>'
+                f'<div style="font-size: 22px; font-weight: 800; color: {score_color};">{score:.0f}% Robustness Score</div>'
+                f'<div style="font-size: 11.5px; color: var(--muted);">Original Verdict: <strong>{rep["original_verdict"]}</strong> ({rep["original_confidence"]:.1%}) &middot; Model: {rep["original_model"]}</div>'
+                f'</div>'
+                f'<div style="font-size: 32px;">🛡️</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            st.markdown('<p class="eyebrow">Perturbation Testbench Matrix</p>', unsafe_allow_html=True)
+            for row in rep["rows"]:
+                badge = '<span class="pert-badge-pass">✓ Robust / Expected</span>' if row["passed"] else '<span class="pert-badge-fail">⚠ Vulnerable / Sensitive</span>'
+                sign = "+" if row["delta_conf"] >= 0 else ""
+                v_color = "status-misinfo" if row["verdict"] == "Misinformation" else "status-reliable"
+                st.markdown(
+                    f'<div class="example-card">'
+                    f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">'
+                    f'<span style="font-size: 11px; font-weight: 700; color: #8c91ff;">{html.escape(row["category"])} ({html.escape(row["target_test"])})</span>'
+                    f'{badge}'
+                    f'</div>'
+                    f'<p style="font-size: 13px; margin: 6px 0;"><strong>Perturbation:</strong> <em>"{html.escape(row["perturbed"])}"</em></p>'
+                    f'<div style="font-size: 11px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap;">'
+                    f'<span>Verdict: <strong class="{v_color}">{row["verdict"]}</strong> ({row["confidence"]:.1%})</span>'
+                    f'<span>&Delta; Conf: <strong>{sign}{row["delta_conf"]:.1%}</strong></span>'
+                    f'<span>Expected: <strong>{html.escape(row["expected"])}</strong></span>'
+                    f'</div>'
+                    f'<div style="font-size: 10.5px; color: var(--muted-2); margin-top: 4px;">{html.escape(row["description"])}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            df_rob = pd.DataFrame([
+                {
+                    "Original Claim": rep["original_claim"],
+                    "Perturbation Category": r["category"],
+                    "Perturbed Claim": r["perturbed"],
+                    "Verdict": r["verdict"],
+                    "Confidence": f"{r['confidence']:.1%}",
+                    "Robustness Status": "Robust" if r["passed"] else "Vulnerable",
+                }
+                for r in rep["rows"]
+            ])
+            st.download_button(
+                "📥 Download Robustness Evaluation as CSV",
+                df_rob.to_csv(index=False),
+                file_name="adversarial_robustness_evaluation.csv",
+                mime="text/csv",
+                key="rob_dl_csv",
+            )
+
+    with right:
+        render_example_cards()
+        st.markdown('<p class="eyebrow" style="margin-top: 1.5rem;">Adversarial Audit Methodology</p>', unsafe_allow_html=True)
+        r_steps = [
+            ("1 · Polarity Inversion (Negation)", "Evaluates if appending 'does not' or 'cannot' successfully inverts the verdict instead of false-positive keyword matching."),
+            ("2 · Clinical Synonym Invariance", "Checks whether swapping terms for formal clinical equivalents (e.g., 'malignant neoplasms') preserves semantic classification."),
+            ("3 · Typographical Perturbation", "Tests subword tokenization robustness under character transpositions common in social media posts."),
+            ("4 · Epistemic Stance & Hedging", "Assesses sensitivity to evidential certainty ('studies suggest' vs 'miracle cure')."),
+        ]
+        for title, note in r_steps:
+            st.markdown(
+                f'<div class="example-card"><div class="example-status">{html.escape(title)}</div>'
+                f"<p>{html.escape(note)}</p></div>",
+                unsafe_allow_html=True,
+            )
+
+
 def model_comparison_tab() -> None:
     section_heading(
         "Model Comparison",
@@ -5359,11 +5763,12 @@ def validation_tab() -> None:
 inject_css()
 render_shell_open()
 
-tab_claim, tab_url, tab_media, tab_compare, tab_batch, tab_perf, tab_validation = st.tabs(
+tab_claim, tab_url, tab_media, tab_robustness, tab_compare, tab_batch, tab_perf, tab_validation = st.tabs(
     [
         "Claim Checker",
         "URL Analysis",
         "Multimodal Scanner",
+        "Robustness Lab",
         "Model Comparison",
         "Batch Inference",
         "Performance",
@@ -5384,6 +5789,11 @@ with tab_url:
 with tab_media:
     st.markdown('<div class="content">', unsafe_allow_html=True)
     multimodal_media_tab()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with tab_robustness:
+    st.markdown('<div class="content">', unsafe_allow_html=True)
+    robustness_lab_tab()
     st.markdown("</div>", unsafe_allow_html=True)
 
 with tab_compare:
