@@ -1357,6 +1357,136 @@ def inject_css() -> None:
             margin-top: 8px;
         }
 
+        /* Scientific Evidence & Grounding Cards */
+        .evidence-banner {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 14px 16px;
+            margin-top: 14px;
+            margin-bottom: 14px;
+        }
+
+        .paper-card {
+            background: #090e14;
+            border: 1px solid var(--line-soft);
+            border-left: 3px solid #26d0c3;
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin-bottom: 9px;
+            transition: border-color 0.15s ease, background 0.15s ease;
+        }
+
+        .paper-card:hover {
+            border-color: #26d0c3;
+            background: #0e1520;
+        }
+
+        .paper-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 4px;
+            line-height: 1.4;
+        }
+
+        .paper-meta {
+            font-size: 11px;
+            color: var(--muted);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .paper-badge {
+            background: rgba(38, 208, 195, 0.14);
+            color: #26d0c3;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+        }
+
+        .factcheck-card {
+            background: #0c1017;
+            border: 1px solid var(--line-soft);
+            border-left: 3px solid #f6c238;
+            border-radius: 6px;
+            padding: 11px 14px;
+            margin-bottom: 10px;
+        }
+
+        .factcheck-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+            font-size: 11px;
+        }
+
+        .factcheck-publisher {
+            font-weight: 800;
+            color: #f6c238;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .factcheck-rating {
+            background: rgba(255, 90, 99, 0.2);
+            color: #ff858c;
+            border: 1px solid rgba(255, 90, 99, 0.35);
+            padding: 2px 7px;
+            border-radius: 9999px;
+            font-weight: 700;
+            font-size: 10px;
+        }
+
+        .factcheck-summary {
+            font-size: 12px;
+            color: #cbd5e1;
+            line-height: 1.45;
+            margin-bottom: 4px;
+        }
+
+        /* Domain Trust Badge */
+        .domain-trust-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 700;
+            margin-top: 6px;
+            margin-bottom: 10px;
+        }
+
+        .domain-trust-high {
+            background: rgba(25, 209, 143, 0.15);
+            color: #4eedb0;
+            border: 1px solid rgba(25, 209, 143, 0.35);
+        }
+
+        .domain-trust-mod {
+            background: rgba(246, 194, 56, 0.15);
+            color: #fcd34d;
+            border: 1px solid rgba(246, 194, 56, 0.35);
+        }
+
+        .domain-trust-low {
+            background: rgba(255, 90, 99, 0.18);
+            color: #ff858c;
+            border: 1px solid rgba(255, 90, 99, 0.4);
+        }
+
+        .domain-trust-unverified {
+            background: rgba(148, 163, 184, 0.12);
+            color: #cbd5e1;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+        }
+
         @media (max-width: 760px) {
             .block-container {
                 max-width: calc(100vw - 24px);
@@ -2677,6 +2807,31 @@ def generate_pdf_single_claim(claim: str, selected_vote: dict, model_name: str, 
         mtbl.set_fontsize(8.5)
         mtbl.scale(1, 1.4)
 
+        # Scientific evidence section
+        fig.text(0.08, 0.38, "PEER-REVIEWED EVIDENCE GROUNDING (PubMed / Europe PMC):", fontsize=9.5, weight="bold", color="#1e293b")
+        evidence = fetch_pubmed_evidence(claim, max_results=2)
+        if evidence:
+            ev_y = 0.345
+            for paper in evidence[:2]:
+                title_sh = textwrap.shorten(paper["title"], width=85, placeholder="...")
+                meta_sh = f"{paper.get('source', 'Journal')} ({paper.get('year', '')}) | Database: {paper.get('database', 'PubMed')}"
+                fig.text(0.08, ev_y, f"• {title_sh}", fontsize=8.5, color="#0f172a", weight="bold")
+                fig.text(0.10, ev_y - 0.02, meta_sh, fontsize=8, color="#64748b")
+                ev_y -= 0.05
+        else:
+            fig.text(0.08, 0.345, "No direct peer-reviewed studies indexed for query terms.", fontsize=8.5, color="#64748b", style="italic")
+
+        # Verified Fact Check section
+        fchecks = match_verified_factchecks(claim)
+        if fchecks:
+            fc_y = 0.21
+            fig.text(0.08, fc_y, "INDEPENDENT FACT-CHECK AUDIT GROUNDING:", fontsize=9.5, weight="bold", color="#1e293b")
+            for fc in fchecks[:1]:
+                fc_title = f"• {fc['publisher']} Fact-Check Rating: {fc['rating']}"
+                fig.text(0.08, fc_y - 0.03, fc_title, fontsize=8.5, color="#dc2626" if "False" in fc["rating"] or "Mis" in fc["rating"] else "#0284c7", weight="bold")
+                sum_wrap = textwrap.shorten(fc["summary"], width=90, placeholder="...")
+                fig.text(0.10, fc_y - 0.052, sum_wrap, fontsize=8, color="#334155")
+
         fig.text(0.08, 0.06, "Disclaimer: Automated decision-support signal generated by clinical NLP models. Not medical advice.", fontsize=7.5, color="#94a3b8")
         fig.text(0.92, 0.06, "ClaimCheck AI | Page 1 of 1", fontsize=7.5, color="#94a3b8", ha="right")
 
@@ -2684,6 +2839,315 @@ def generate_pdf_single_claim(claim: str, selected_vote: dict, model_name: str, 
         plt.close(fig)
 
     return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Scientific evidence grounding & domain credibility
+# ---------------------------------------------------------------------------
+TRUSTED_DOMAIN_REGISTRY: dict[str, dict] = {
+    "who.int": {"tier": "High", "score": 98, "category": "Global Health Agency", "badge": "Authoritative Agency", "icon": "🏛️"},
+    "cdc.gov": {"tier": "High", "score": 98, "category": "Public Health Agency", "badge": "Authoritative Agency", "icon": "🏛️"},
+    "nih.gov": {"tier": "High", "score": 98, "category": "Medical Research Agency", "badge": "Authoritative Agency", "icon": "🏛️"},
+    "fda.gov": {"tier": "High", "score": 98, "category": "Health Regulatory Agency", "badge": "Authoritative Agency", "icon": "🏛️"},
+    "nhs.uk": {"tier": "High", "score": 98, "category": "Public Healthcare Service", "badge": "Authoritative Agency", "icon": "🏛️"},
+    "ecdc.europa.eu": {"tier": "High", "score": 98, "category": "Public Health Agency", "badge": "Authoritative Agency", "icon": "🏛️"},
+    "health.gov": {"tier": "High", "score": 96, "category": "Government Health Agency", "badge": "Authoritative Agency", "icon": "🏛️"},
+    "unicef.org": {"tier": "High", "score": 95, "category": "International Organization", "badge": "Authoritative Agency", "icon": "🏛️"},
+    "ncbi.nlm.nih.gov": {"tier": "High", "score": 99, "category": "National Library of Medicine", "badge": "Scientific Index", "icon": "📚"},
+    "mayoclinic.org": {"tier": "High", "score": 95, "category": "Academic Medical Center", "badge": "Academic Hospital", "icon": "🏥"},
+    "clevelandclinic.org": {"tier": "High", "score": 95, "category": "Academic Medical Center", "badge": "Academic Hospital", "icon": "🏥"},
+    "hopkinsmedicine.org": {"tier": "High", "score": 95, "category": "Academic Medical Center", "badge": "Academic Hospital", "icon": "🏥"},
+    "health.harvard.edu": {"tier": "High", "score": 95, "category": "Medical School Publication", "badge": "Academic Hospital", "icon": "🏥"},
+    "mountsinai.org": {"tier": "High", "score": 94, "category": "Academic Medical Center", "badge": "Academic Hospital", "icon": "🏥"},
+    "stanfordhealthcare.org": {"tier": "High", "score": 94, "category": "Academic Medical Center", "badge": "Academic Hospital", "icon": "🏥"},
+    "nejm.org": {"tier": "High", "score": 96, "category": "Peer-Reviewed Medical Journal", "badge": "Peer-Reviewed", "icon": "🔬"},
+    "thelancet.com": {"tier": "High", "score": 96, "category": "Peer-Reviewed Medical Journal", "badge": "Peer-Reviewed", "icon": "🔬"},
+    "jamanetwork.com": {"tier": "High", "score": 96, "category": "Peer-Reviewed Medical Journal", "badge": "Peer-Reviewed", "icon": "🔬"},
+    "bmj.com": {"tier": "High", "score": 96, "category": "Peer-Reviewed Medical Journal", "badge": "Peer-Reviewed", "icon": "🔬"},
+    "nature.com": {"tier": "High", "score": 96, "category": "Scientific Journal", "badge": "Peer-Reviewed", "icon": "🔬"},
+    "cell.com": {"tier": "High", "score": 95, "category": "Scientific Journal", "badge": "Peer-Reviewed", "icon": "🔬"},
+    "sciencedirect.com": {"tier": "High", "score": 95, "category": "Scientific Publisher", "badge": "Peer-Reviewed", "icon": "🔬"},
+    "cochranelibrary.com": {"tier": "High", "score": 98, "category": "Systematic Review Database", "badge": "Systematic Reviews", "icon": "🔬"},
+    "webmd.com": {"tier": "Moderate", "score": 82, "category": "Health Information Portal", "badge": "Clinical Media", "icon": "🩺"},
+    "healthline.com": {"tier": "Moderate", "score": 82, "category": "Health Information Portal", "badge": "Clinical Media", "icon": "🩺"},
+    "medicalnewstoday.com": {"tier": "Moderate", "score": 80, "category": "Health News Outlet", "badge": "Clinical Media", "icon": "🩺"},
+    "verywellhealth.com": {"tier": "Moderate", "score": 80, "category": "Health Portal", "badge": "Clinical Media", "icon": "🩺"},
+    "scientificamerican.com": {"tier": "High", "score": 90, "category": "Science Journalism", "badge": "Science News", "icon": "🔬"},
+    "bbc.com": {"tier": "Moderate", "score": 78, "category": "General News Media", "badge": "Mainstream News", "icon": "📰"},
+    "reuters.com": {"tier": "Moderate", "score": 85, "category": "Wire News Agency", "badge": "Mainstream News", "icon": "📰"},
+    "apnews.com": {"tier": "Moderate", "score": 85, "category": "Wire News Agency", "badge": "Mainstream News", "icon": "📰"},
+    "naturalnews.com": {"tier": "Low", "score": 12, "category": "Known Health Misinformation Outlet", "badge": "Flagged Domain", "icon": "⚠️"},
+    "infowars.com": {"tier": "Low", "score": 10, "category": "Conspiracy / Fringe Outlet", "badge": "Flagged Domain", "icon": "⚠️"},
+    "mercola.com": {"tier": "Low", "score": 15, "category": "Alternative Health / Unsubstantiated Claims", "badge": "Flagged Domain", "icon": "⚠️"},
+    "theepochtimes.com": {"tier": "Low", "score": 25, "category": "Hyper-partisan / Misinformation", "badge": "Flagged Domain", "icon": "⚠️"},
+    "childrenshealthdefense.org": {"tier": "Low", "score": 14, "category": "Anti-Vaccine Advocacy Group", "badge": "Flagged Domain", "icon": "⚠️"},
+    "greenmedinfo.com": {"tier": "Low", "score": 18, "category": "Alternative Health / Pseudoscience", "badge": "Flagged Domain", "icon": "⚠️"},
+    "healthnutnews.com": {"tier": "Low", "score": 15, "category": "Fringe Health Blog", "badge": "Flagged Domain", "icon": "⚠️"},
+    "beforeitsnews.com": {"tier": "Low", "score": 10, "category": "Unmoderated Fringe Blog", "badge": "Flagged Domain", "icon": "⚠️"},
+    "newspunch.com": {"tier": "Low", "score": 8, "category": "Fabricated News Outlet", "badge": "Flagged Domain", "icon": "⚠️"},
+}
+
+VERIFIED_FACTCHECK_INDEX: list[dict] = [
+    {
+        "keywords": ["autism", "vaccine", "mmr"],
+        "claim": "MMR vaccines cause autism in children",
+        "publisher": "Health Feedback & FactCheck.org",
+        "rating": "False / Unsupported",
+        "summary": "Decades of rigorous cohort studies involving millions of children confirm no causal link between the MMR vaccine and autism.",
+        "url": "https://healthfeedback.org/claimreview/decades-of-scientific-studies-refute-claims-that-vaccines-cause-autism/",
+    },
+    {
+        "keywords": ["bleach", "mms", "chlorine dioxide", "mineral solution"],
+        "claim": "Miracle Mineral Solution / chlorine dioxide cures autism, COVID-19, or cancer",
+        "publisher": "FDA & Snopes",
+        "rating": "False / Highly Dangerous",
+        "summary": "Industrial bleaching solutions have zero clinical evidence for treating diseases and can cause severe liver failure, vomiting, and death.",
+        "url": "https://www.fda.gov/consumers/consumer-updates/danger-dont-drink-miracle-mineral-solution-or-similar-products",
+    },
+    {
+        "keywords": ["5g", "electromagnetic", "radiation", "covid"],
+        "claim": "5G mobile networks spread or cause COVID-19 infection",
+        "publisher": "Full Fact & Reuters Fact Check",
+        "rating": "False",
+        "summary": "COVID-19 is a biological respiratory virus transmitted through droplets, completely independent of radio-frequency electromagnetic waves.",
+        "url": "https://fullfact.org/online/5g-and-coronavirus-frequently-asked-questions/",
+    },
+    {
+        "keywords": ["ivermectin", "cure", "covid"],
+        "claim": "Ivermectin is an FDA-approved cure for coronavirus infection",
+        "publisher": "Cochrane Library & Health Feedback",
+        "rating": "Misleading / Unsupported",
+        "summary": "Comprehensive randomized trials demonstrate that ivermectin provides no clinical benefit in reducing COVID-19 mortality or hospitalizations.",
+        "url": "https://www.cochranelibrary.com/cdsr/doi/10.1002/14651858.CD015017.pub2/full",
+    },
+    {
+        "keywords": ["alkaline", "cancer", "ph", "acid"],
+        "claim": "An alkaline diet cures cancer because cancer cells cannot survive in alkaline blood",
+        "publisher": "American Institute for Cancer Research",
+        "rating": "Biologically Inaccurate",
+        "summary": "Dietary intake cannot alter systemic arterial blood pH, which is strictly homeostatically buffered by renal and pulmonary systems.",
+        "url": "https://www.aicr.org/resources/blog/an-alkaline-diet-and-cancer/",
+    },
+    {
+        "keywords": ["garlic", "coronavirus", "prevent"],
+        "claim": "Eating garlic or boiled garlic water protects against coronavirus infection",
+        "publisher": "World Health Organization (WHO)",
+        "rating": "False",
+        "summary": "Garlic is a healthy food with some antimicrobial properties, but there is no evidence that eating it protects against coronavirus infection.",
+        "url": "https://www.who.int/emergencies/diseases/novel-coronavirus-2019/advice-for-public/myth-busters",
+    },
+    {
+        "keywords": ["vitamin c", "cure", "cancer"],
+        "claim": "High-dose Vitamin C cures cancer and replaces chemotherapy",
+        "publisher": "National Cancer Institute (NCI)",
+        "rating": "Unproven / Misleading",
+        "summary": "Controlled clinical trials show that oral high-dose Vitamin C does not shrink cancer tumors or substitute for standard oncology treatments.",
+        "url": "https://www.cancer.gov/research/key-initiatives/ras/ras-news/stories/vitamin-c-story",
+    },
+]
+
+BIOMED_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+    "by", "from", "up", "about", "into", "over", "after", "is", "are", "was", "were",
+    "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could",
+    "will", "would", "shall", "should", "may", "might", "must", "it", "its", "this",
+    "that", "these", "those", "i", "you", "he", "she", "we", "they", "completely",
+    "instantly", "secret", "miracle", "doctors", "scientists", "claim", "claims",
+    "said", "says", "people", "warning", "warns", "proven", "proves", "evidence",
+}
+
+
+def evaluate_domain_credibility(raw_domain: str) -> dict:
+    domain = (raw_domain or "").lower().strip().removeprefix("www.")
+    if domain in TRUSTED_DOMAIN_REGISTRY:
+        reg = TRUSTED_DOMAIN_REGISTRY[domain]
+        return {**reg, "domain": domain}
+
+    if domain.endswith(".gov"):
+        return {
+            "tier": "High",
+            "score": 96,
+            "category": "Government Public Health Entity",
+            "badge": "Official Government Agency",
+            "icon": "🏛️",
+            "domain": domain,
+        }
+    if domain.endswith(".edu") or domain.endswith(".ac.uk"):
+        return {
+            "tier": "High",
+            "score": 92,
+            "category": "Academic & Research Institution",
+            "badge": "Academic Institution",
+            "icon": "🎓",
+            "domain": domain,
+        }
+    if domain.endswith(".org"):
+        return {
+            "tier": "Moderate",
+            "score": 65,
+            "category": "Non-Profit Organization",
+            "badge": "Non-Profit Domain",
+            "icon": "🏢",
+            "domain": domain,
+        }
+
+    return {
+        "tier": "Unverified",
+        "score": 50,
+        "category": "General Web Domain",
+        "badge": "Unindexed Domain",
+        "icon": "🌐",
+        "domain": domain,
+    }
+
+
+def extract_search_terms(claim: str) -> str:
+    tokens = [t.strip(".,;:!?()[]{}\"'").lower() for t in claim.split()]
+    meaningful = [t for t in tokens if len(t) > 2 and t not in BIOMED_STOPWORDS]
+    return " ".join(meaningful[:5])
+
+
+@st.cache_data(ttl=3600, max_entries=128, show_spinner=False)
+def fetch_pubmed_evidence(query: str, max_results: int = 3) -> list[dict]:
+    search_terms = extract_search_terms(query)
+    if not search_terms:
+        return []
+
+    encoded = urllib.parse.quote(search_terms)
+    articles: list[dict] = []
+
+    # 1. Try NCBI PubMed E-utilities
+    try:
+        esearch_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={encoded}&retmode=json&retmax={max_results}&sort=relevance"
+        req = urllib.request.Request(esearch_url, headers={"User-Agent": "ClaimCheckAI/1.0 (https://modear-healthclaimbert.hf.space)"})
+        with urllib.request.urlopen(req, timeout=3.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            id_list = data.get("esearchresult", {}).get("idlist", [])
+
+        if id_list:
+            joined_ids = ",".join(id_list)
+            esum_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id={joined_ids}&retmode=json"
+            with urllib.request.urlopen(urllib.request.Request(esum_url, headers={"User-Agent": "ClaimCheckAI/1.0"}), timeout=3.5) as sresp:
+                sdata = json.loads(sresp.read().decode("utf-8")).get("result", {})
+                for pmid in id_list:
+                    item = sdata.get(pmid, {})
+                    title = item.get("title", "").rstrip(".")
+                    if title:
+                        articles.append({
+                            "title": title,
+                            "source": item.get("source", "PubMed Journal"),
+                            "year": item.get("pubdate", "")[:4],
+                            "pmid": pmid,
+                            "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                            "database": "NCBI PubMed",
+                        })
+    except Exception:
+        pass
+
+    # 2. Fallback or augment with Europe PMC if PubMed had < 2 results
+    if len(articles) < 2:
+        try:
+            epmc_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query={encoded}&format=json&pageSize={max_results}&resultType=lite"
+            req_epmc = urllib.request.Request(epmc_url, headers={"User-Agent": "ClaimCheckAI/1.0"})
+            with urllib.request.urlopen(req_epmc, timeout=3.5) as resp_epmc:
+                data_epmc = json.loads(resp_epmc.read().decode("utf-8"))
+                for r in data_epmc.get("resultList", {}).get("result", []):
+                    title = r.get("title", "").rstrip(".")
+                    pmid = r.get("pmid", "")
+                    doi = r.get("doi", "")
+                    url = f"https://doi.org/{doi}" if doi else (f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else "")
+                    if title and not any(a["title"].lower() == title.lower() for a in articles):
+                        articles.append({
+                            "title": title,
+                            "source": r.get("journalTitle", "Biomedical Literature"),
+                            "year": str(r.get("pubYear", "")),
+                            "pmid": pmid,
+                            "url": url,
+                            "database": "Europe PMC",
+                        })
+                        if len(articles) >= max_results:
+                            break
+        except Exception:
+            pass
+
+    return articles[:max_results]
+
+
+def match_verified_factchecks(claim_text: str) -> list[dict]:
+    lower_text = claim_text.lower()
+    matched: list[dict] = []
+    for item in VERIFIED_FACTCHECK_INDEX:
+        hits = sum(1 for kw in item["keywords"] if kw in lower_text)
+        if hits >= 2 or (len(item["keywords"]) == 2 and hits >= 1):
+            matched.append(item)
+    return matched[:2]
+
+
+def google_factcheck_explorer_url(claim_text: str) -> str:
+    terms = extract_search_terms(claim_text)
+    return f"https://toolbox.google.com/factcheck/explorer/search/{urllib.parse.quote(terms)};hl=en"
+
+
+def render_scientific_grounding(claim: str) -> None:
+    articles = fetch_pubmed_evidence(claim, max_results=3)
+    factchecks = match_verified_factchecks(claim)
+    explorer_url = google_factcheck_explorer_url(claim)
+
+    if not articles and not factchecks:
+        return
+
+    st.markdown('<p class="eyebrow">Live Scientific Evidence & Grounding (RAG)</p>', unsafe_allow_html=True)
+
+    if factchecks:
+        for fc in factchecks:
+            publisher = html.escape(fc["publisher"])
+            rating = html.escape(fc["rating"])
+            summary = html.escape(fc["summary"])
+            url_link = html.escape(fc["url"], quote=True)
+            st.markdown(
+                f'<div class="factcheck-card">'
+                f'<div class="factcheck-header">'
+                f'<span class="factcheck-publisher">✓ {publisher}</span>'
+                f'<span class="factcheck-rating">{rating}</span>'
+                f'</div>'
+                f'<div class="factcheck-summary">{summary}</div>'
+                f'<div class="paper-meta"><a href="{url_link}" target="_blank" rel="noopener noreferrer">Read Investigative Fact-Check &rarr;</a></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    if articles:
+        cards_html = []
+        for art in articles:
+            title = html.escape(art["title"])
+            source = html.escape(art.get("source", "Peer-Reviewed Journal"))
+            year = html.escape(str(art.get("year", "")))
+            db = html.escape(art.get("database", "PubMed"))
+            url = html.escape(art.get("url", "#"), quote=True)
+            cards_html.append(
+                f'<div class="paper-card">'
+                f'<div class="paper-title"><a href="{url}" target="_blank" rel="noopener noreferrer">{title}</a></div>'
+                f'<div class="paper-meta">'
+                f'<span class="paper-badge">{db}</span>'
+                f'<span>{source}</span>'
+                f'<span>{year}</span>'
+                f'<a href="{url}" target="_blank" rel="noopener noreferrer">View Study &rarr;</a>'
+                f'</div>'
+                f'</div>'
+            )
+        st.markdown(
+            f'<div class="evidence-banner">'
+            f'<div style="font-size: 11px; font-weight: 750; color: var(--muted); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;">'
+            f'Peer-Reviewed Scientific Literature (NCBI PubMed & Europe PMC)'
+            f'</div>'
+            f'{"".join(cards_html)}'
+            f'<div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">'
+            f'<span style="font-size: 11px; color: var(--muted);">Retrieved in real time via NCBI E-utilities API.</span>'
+            f'<a href="{html.escape(explorer_url, quote=True)}" target="_blank" rel="noopener noreferrer" style="font-size: 11px; font-weight: 600;">Search Google Fact Check Explorer &rarr;</a>'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
 
 def claim_checker_tab() -> None:
@@ -2733,6 +3197,7 @@ def claim_checker_tab() -> None:
                         selected_vote, selected_model, decision_note, _ = select_decision_vote(votes, primary_model, claim)
                         if selected_vote is None:
                             st.error("No model prediction was available.")
+                        else:
                             render_prediction(
                                 selected_vote["label"],
                                 float(selected_vote.get("confidence", 0.0)),
@@ -2742,6 +3207,7 @@ def claim_checker_tab() -> None:
                                 decision_note=decision_note,
                             )
                             render_token_attribution(claim)
+                            render_scientific_grounding(claim)
                             pdf_single = generate_pdf_single_claim(claim, selected_vote, selected_model, votes)
                             st.download_button(
                                 "📄 Download Claim Fact-Check Audit PDF",
@@ -3126,7 +3592,7 @@ def score_article(title: str, paragraphs: list[str]) -> dict | None:
     }
 
 
-def assess_url_risk(article_result: dict, claim_rows: list[dict]) -> dict:
+def assess_url_risk(article_result: dict, claim_rows: list[dict], domain_cred: dict | None = None) -> dict:
     reasons: list[str] = []
     score = 0
     n_models = article_result["n_models"]
@@ -3162,13 +3628,30 @@ def assess_url_risk(article_result: dict, claim_rows: list[dict]) -> dict:
     else:
         reasons.append("No standalone health claims were extracted, so the verdict relies on the article-level score.")
 
+    if domain_cred:
+        tier = domain_cred.get("tier", "Unverified")
+        dom_name = domain_cred.get("domain", "")
+        dom_badge = domain_cred.get("badge", "")
+        dom_score = domain_cred.get("score", 50)
+        if tier == "Low":
+            score += 2
+            reasons.append(
+                f"Source domain '{dom_name}' has low credibility score ({dom_score}/100, {dom_badge}), frequently associated with unverified health claims."
+            )
+        elif tier == "High":
+            if not safety_hits and score > 0:
+                score = max(0, score - 1)
+            reasons.append(
+                f"Source domain '{dom_name}' is an indexed authoritative health/academic entity ({dom_score}/100, {dom_badge})."
+            )
+
     if score >= 4:
         level, verdict = "High", "Likely Misinformation"
     elif score >= 2:
         level, verdict = "Elevated", "Mixed Signals - Review Recommended"
     else:
         level, verdict = "Low", "Likely Reliable"
-    return {"level": level, "verdict": verdict, "score": score, "reasons": reasons}
+    return {"level": level, "verdict": verdict, "score": score, "reasons": reasons, "domain_cred": domain_cred}
 
 
 def analyse_article(article: dict, primary_model: str) -> dict:
@@ -3208,6 +3691,7 @@ def analyse_article(article: dict, primary_model: str) -> dict:
     progress.empty()
 
     scope_text = " ".join([article.get("title", ""), article.get("description", "")] + paragraphs[:3])
+    domain_cred = evaluate_domain_credibility(article.get("domain", ""))
     return {
         "article": {
             **{
@@ -3219,7 +3703,8 @@ def analyse_article(article: dict, primary_model: str) -> dict:
         "article_result": article_result,
         "claims": claim_rows,
         "sentences_scanned": len(sentences),
-        "risk": assess_url_risk(article_result, claim_rows),
+        "domain_cred": domain_cred,
+        "risk": assess_url_risk(article_result, claim_rows, domain_cred=domain_cred),
         "off_topic": health_scope_notice(scope_text) is not None,
     }
 
@@ -3309,7 +3794,9 @@ def generate_pdf_fact_check_report(report: dict) -> bytes:
 
         fig.text(0.08, meta_y - 0.022, "SOURCE DOMAIN:", fontsize=8.5, weight="bold", color="#334155")
         domain_str = article.get("domain") or article.get("site_name") or "Direct Text Ingestion"
-        fig.text(0.26, meta_y - 0.022, textwrap.shorten(domain_str, width=70, placeholder="..."), fontsize=8.5, color="#0f172a")
+        domain_cred = report.get("domain_cred") or evaluate_domain_credibility(article.get("domain", ""))
+        cred_text = f"{domain_str} [{domain_cred.get('badge', 'Domain')} - Trust Index: {domain_cred.get('score', 50)}/100]"
+        fig.text(0.26, meta_y - 0.022, textwrap.shorten(cred_text, width=72, placeholder="..."), fontsize=8.5, color="#0f172a")
 
         fig.text(0.08, meta_y - 0.044, "OVERALL RISK LEVEL:", fontsize=8.5, weight="bold", color="#334155")
         risk_level = risk.get("level", "Unknown")
@@ -3426,6 +3913,7 @@ def render_url_report(report: dict) -> None:
     risk = report["risk"]
     claims = report["claims"]
 
+    domain_cred = report.get("domain_cred") or evaluate_domain_credibility(article.get("domain", ""))
     card_class = {"High": "bad", "Elevated": "neutral", "Low": "good"}[risk["level"]]
     label_class = {"High": "status-misinfo", "Elevated": "", "Low": "status-reliable"}[risk["level"]]
     title = html.escape(article.get("title") or "Untitled page")
@@ -3435,11 +3923,29 @@ def render_url_report(report: dict) -> None:
             f'<a href="{html.escape(article["final_url"], quote=True)}" target="_blank" '
             f'rel="noopener noreferrer">{source}</a>'
         )
+
+    tier_css = {
+        "High": "domain-trust-high",
+        "Moderate": "domain-trust-mod",
+        "Low": "domain-trust-low",
+        "Unverified": "domain-trust-unverified",
+    }.get(domain_cred.get("tier", "Unverified"), "domain-trust-unverified")
+    domain_badge_html = ""
+    if article.get("domain"):
+        domain_badge_html = (
+            f'<div class="domain-trust-badge {tier_css}">'
+            f'<span>{domain_cred.get("icon", "🌐")}</span>'
+            f'<span>Source Domain Credibility: <strong>{html.escape(domain_cred.get("badge", "Domain"))}</strong> '
+            f'({domain_cred.get("score", 50)}/100 &middot; {html.escape(domain_cred.get("category", ""))})</span>'
+            f'</div>'
+        )
+
     reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in risk["reasons"])
     st.markdown(
         f'<div class="prediction-card {card_class}">'
         f'<p class="prediction-label {label_class}">{html.escape(risk["verdict"])}</p>'
         f'<p class="small-muted">Risk level: <strong>{risk["level"]}</strong> &middot; Source: {source}</p>'
+        f'{domain_badge_html}'
         f'<p class="small-muted"><strong>{title}</strong></p>'
         f'<div class="rationale"><strong>Why this result?</strong><ul>{reasons}</ul>'
         f"This is a decision-support signal from text classifiers, not a fact-check. "
@@ -3521,6 +4027,10 @@ def render_url_report(report: dict) -> None:
                 f'{trigger_pills}</div>',
                 unsafe_allow_html=True,
             )
+
+    top_claims_for_grounding = sorted(flagged, key=lambda item: item["confidence"], reverse=True) if flagged else claims
+    if top_claims_for_grounding:
+        render_scientific_grounding(top_claims_for_grounding[0]["claim"])
 
     if claims:
         claims_frame = pd.DataFrame(claims)
