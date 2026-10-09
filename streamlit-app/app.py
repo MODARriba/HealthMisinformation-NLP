@@ -9,9 +9,15 @@ from __future__ import annotations
 import difflib
 import html
 import io
+import ipaddress
 import json
 import re
+import socket
+import urllib.error
+import urllib.request
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
@@ -2344,6 +2350,710 @@ def claim_checker_tab() -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# URL / article analysis
+# ---------------------------------------------------------------------------
+URL_FETCH_TIMEOUT_S = 12
+URL_MAX_BYTES = 3 * 1024 * 1024
+URL_MAX_REDIRECTS = 5
+URL_MIN_ARTICLE_WORDS = 40
+URL_MAX_CLAIMS = 15
+ARTICLE_CHUNK_WORDS = 180
+ARTICLE_MAX_CHUNKS = 8
+URL_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 ClaimCheckAI/1.0"
+)
+CLAIM_CUE_RE = re.compile(
+    r"\b(cures?|prevents?|causes?|treats?|reduces?|increases?|risks?|kills?|boosts?|protects?|"
+    r"linked|links?|proven|proves?|shows?|study|studies|research|trials?|effective|safe|"
+    r"dangerous|harmful|toxic|heals?|reverses?|lowers?|improves?|fights?|eliminates?|detox|"
+    r"miracle|guaranteed|doctors?|scientists?|approved?|banned?)\b"
+)
+SENTENCE_SPLIT_RE = re.compile(
+    r"(?:(?<=[.!?])|(?<=[.!?][\"'\u201d\u2019)\]]))\s+(?=[\"'\u201c\u2018(\[]?[A-Z0-9])"
+)
+ABBREVIATION_END_RE = re.compile(r"\b(?:Dr|Mr|Mrs|Ms|Prof|St|Sr|Jr|vs|etc|e\.g|i\.e|U\.S|U\.K|No|Fig)\.$")
+
+
+class ArticleTextExtractor(HTMLParser):
+    """Lightweight readability-style extractor built on the standard library."""
+
+    SKIP_TAGS = {
+        "script", "style", "noscript", "template", "svg", "nav", "footer",
+        "header", "aside", "form", "button", "iframe", "select", "option",
+    }
+    BLOCK_TAGS = {"p", "li", "h1", "h2", "h3", "h4", "blockquote", "figcaption", "dd", "pre"}
+    VOID_TAGS = {
+        "br", "img", "hr", "meta", "link", "input", "source", "wbr", "area",
+        "base", "col", "embed", "param", "track",
+    }
+    META_KEYS = {
+        "og:title", "twitter:title", "description", "og:description",
+        "twitter:description", "og:site_name",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.skip_depth = 0
+        self.block_depth = 0
+        self.article_depth = 0
+        self.in_title = False
+        self.title_parts: list[str] = []
+        self.meta: dict[str, str] = {}
+        self.blocks: list[tuple[str, bool]] = []
+        self._current: list[str] = []
+
+    def _flush(self) -> None:
+        text = " ".join("".join(self._current).split())
+        if text:
+            self.blocks.append((text, self.article_depth > 0))
+        self._current = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == "meta":
+            attr_map = {str(k).lower(): (v or "") for k, v in attrs}
+            key = (attr_map.get("property") or attr_map.get("name") or "").lower()
+            if key in self.META_KEYS and attr_map.get("content"):
+                self.meta.setdefault(key, " ".join(attr_map["content"].split()))
+            return
+        if tag in self.VOID_TAGS:
+            return
+        if tag in self.SKIP_TAGS:
+            self.skip_depth += 1
+            return
+        if tag == "title":
+            self.in_title = True
+        elif tag in {"article", "main"}:
+            self.article_depth += 1
+        elif tag in self.BLOCK_TAGS:
+            self._flush()
+            self.block_depth += 1
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in self.SKIP_TAGS:
+            self.skip_depth = max(0, self.skip_depth - 1)
+        elif tag == "title":
+            self.in_title = False
+        elif tag in {"article", "main"}:
+            self.article_depth = max(0, self.article_depth - 1)
+        elif tag in self.BLOCK_TAGS:
+            self._flush()
+            self.block_depth = max(0, self.block_depth - 1)
+
+    def handle_data(self, data):
+        if self.skip_depth:
+            return
+        if self.in_title:
+            self.title_parts.append(data)
+        elif self.block_depth > 0:
+            self._current.append(data)
+
+
+def extract_article(html_text: str) -> dict:
+    parser = ArticleTextExtractor()
+    try:
+        parser.feed(html_text)
+        parser.close()
+    except Exception:
+        pass
+    parser._flush()
+
+    article_blocks = [text for text, in_article in parser.blocks if in_article]
+    if sum(len(text.split()) for text in article_blocks) >= URL_MIN_ARTICLE_WORDS:
+        candidates = article_blocks
+    else:
+        candidates = [text for text, _ in parser.blocks]
+
+    seen: set[str] = set()
+    paragraphs: list[str] = []
+    for text in candidates:
+        if len(text.split()) < 6:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        paragraphs.append(text)
+
+    page_title = " ".join("".join(parser.title_parts).split())
+    return {
+        "title": parser.meta.get("og:title") or parser.meta.get("twitter:title") or page_title,
+        "description": (
+            parser.meta.get("og:description")
+            or parser.meta.get("description")
+            or parser.meta.get("twitter:description")
+            or ""
+        ),
+        "site_name": parser.meta.get("og:site_name", ""),
+        "paragraphs": paragraphs,
+    }
+
+
+def paragraphs_from_text(text: str) -> list[str]:
+    parts = (" ".join(part.split()) for part in re.split(r"\r?\n", text or ""))
+    return [part for part in parts if part]
+
+
+def normalize_input_url(raw_url: str) -> str:
+    url = (raw_url or "").strip()
+    if not url:
+        raise ValueError("Enter a website link to analyse.")
+    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
+        url = f"https://{url}"
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Only http:// and https:// links are supported.")
+    if not parsed.hostname or "." not in parsed.hostname:
+        raise ValueError("That does not look like a valid website address.")
+    return url
+
+
+def assert_public_host(url: str) -> None:
+    """Block requests to local, private, or otherwise non-public network addresses."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in {"http", "https"} or not host:
+        raise ValueError("Only public http:// and https:// websites can be analysed.")
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+        raise ValueError("Local or internal network addresses are not allowed.")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as exc:
+        raise ValueError("The link contains an invalid port number.") from exc
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise ValueError(f"Could not find the website '{host}'. Check the link.") from exc
+    for info in infos:
+        address = ipaddress.ip_address(str(info[4][0]).split("%")[0])
+        mapped = getattr(address, "ipv4_mapped", None)
+        if mapped is not None:
+            address = mapped
+        if not address.is_global or address.is_multicast:
+            raise ValueError("Local or internal network addresses are not allowed.")
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    max_redirections = URL_MAX_REDIRECTS
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        assert_public_host(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+@st.cache_data(ttl=900, max_entries=64, show_spinner=False)
+def fetch_url_article(url: str) -> dict:
+    assert_public_host(url)
+    opener = urllib.request.build_opener(SafeRedirectHandler())
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": URL_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+    try:
+        with opener.open(request, timeout=URL_FETCH_TIMEOUT_S) as response:
+            final_url = response.geturl()
+            content_type = response.headers.get_content_type()
+            if content_type not in {"text/html", "application/xhtml+xml", "text/plain"}:
+                raise ValueError(
+                    f"This link returned '{content_type}' instead of a web page. "
+                    "PDFs, images, and videos are not supported yet."
+                )
+            raw = response.read(URL_MAX_BYTES + 1)
+            charset = response.headers.get_content_charset() or "utf-8"
+    except urllib.error.HTTPError as exc:
+        if exc.code in {401, 403, 429}:
+            raise ValueError(
+                f"The website refused automated access (HTTP {exc.code}). "
+                "Use 'Paste article text' to analyse it instead."
+            ) from exc
+        if exc.code == 404:
+            raise ValueError("Page not found (HTTP 404). Check the link and try again.") from exc
+        raise ValueError(f"The website returned an error (HTTP {exc.code}).") from exc
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (socket.timeout, TimeoutError)):
+            raise ValueError("The website took too long to respond. Try again later.") from exc
+        raise ValueError(f"Could not reach the website ({exc.reason}).") from exc
+    except (socket.timeout, TimeoutError) as exc:
+        raise ValueError("The website took too long to respond. Try again later.") from exc
+
+    truncated = len(raw) > URL_MAX_BYTES
+    raw = raw[:URL_MAX_BYTES]
+    try:
+        page_text = raw.decode(charset, errors="replace")
+    except LookupError:
+        page_text = raw.decode("utf-8", errors="replace")
+
+    if content_type == "text/plain":
+        article = {"title": "", "description": "", "site_name": "", "paragraphs": paragraphs_from_text(page_text)}
+    else:
+        article = extract_article(page_text)
+    article.update(
+        {
+            "final_url": final_url,
+            "domain": (urlparse(final_url).hostname or "").removeprefix("www."),
+            "truncated": truncated,
+        }
+    )
+    return article
+
+
+def split_sentences(paragraphs: list[str]) -> list[str]:
+    sentences: list[str] = []
+    for paragraph in paragraphs:
+        pieces = [piece.strip() for piece in SENTENCE_SPLIT_RE.split(paragraph) if piece.strip()]
+        merged: list[str] = []
+        for piece in pieces:
+            if merged and ABBREVIATION_END_RE.search(merged[-1]):
+                merged[-1] = f"{merged[-1]} {piece}"
+            else:
+                merged.append(piece)
+        sentences.extend(merged)
+    return sentences
+
+
+def candidate_claims(sentences: list[str], limit: int = URL_MAX_CLAIMS) -> list[tuple[int, str]]:
+    """Pick the most claim-like, health-related sentences, returned in document order."""
+    scored: list[tuple[float, int, str]] = []
+    seen: set[str] = set()
+    for index, sentence in enumerate(sentences):
+        word_count = len(sentence.split())
+        if word_count < 6 or word_count > 60 or sentence.rstrip().endswith("?"):
+            continue
+        key = normalize_claim_text(sentence)
+        if key in seen:
+            continue
+        seen.add(key)
+        if health_scope_notice(sentence):
+            continue
+        score = float(len(set(CLAIM_CUE_RE.findall(sentence.lower()))))
+        if misinformation_safety_reason(sentence):
+            score += 3.0
+        elif reliable_context_reason(sentence):
+            score += 1.0
+        if re.search(r"\d", sentence):
+            score += 0.5
+        scored.append((score - index * 0.001, index, sentence))
+
+    top = sorted(scored, key=lambda item: item[0], reverse=True)[:limit]
+    if not top:
+        fallback = [
+            (float(len(CLAIM_CUE_RE.findall(sent.lower()))), idx, sent)
+            for idx, sent in enumerate(sentences)
+            if 6 <= len(sent.split()) <= 60
+        ]
+        top = sorted(fallback, key=lambda item: item[0], reverse=True)[:limit]
+    return [(index, sentence) for _, index, sentence in sorted(top, key=lambda item: item[1])]
+
+
+def predict_transformer_batch(name: str, texts: list[str]) -> list[dict[str, float]] | None:
+    bundle = load_transformer(name)
+    if bundle is None or not texts:
+        return None
+    tokenizer, model, id2label = bundle
+    import torch
+
+    inputs = tokenizer(texts, return_tensors="pt", truncation=True, max_length=MAX_LENGTH, padding=True)
+    device = getattr(model, "device", None)
+    if device is not None:
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+    with torch.no_grad():
+        logits = model(**inputs).logits
+    rows = torch.softmax(logits, dim=-1).tolist()
+    return [
+        {id2label.get(i, ID2LABEL_FALLBACK[i]): float(p) for i, p in enumerate(row)}
+        for row in rows
+    ]
+
+
+def score_article(title: str, paragraphs: list[str]) -> dict | None:
+    """Article-level vote: transformers average over chunks, TF-IDF reads the full text."""
+    body_words = " ".join(paragraphs).split()
+    prefix = f"{title.strip()}. " if title and title.strip() else ""
+    full_text = prefix + " ".join(body_words)
+    chunks = [
+        prefix + " ".join(body_words[start:start + ARTICLE_CHUNK_WORDS])
+        for start in range(0, len(body_words), ARTICLE_CHUNK_WORDS)
+    ][:ARTICLE_MAX_CHUNKS]
+    if not chunks and full_text:
+        chunks = [full_text]
+
+    votes: list[dict] = []
+    for model_name in MODEL_ORDER:
+        if model_name == "TF-IDF + LR":
+            result = predict(model_name, full_text)
+            prob_rows = [result[2]] if result else []
+        else:
+            prob_rows = predict_transformer_batch(model_name, chunks) or []
+        if not prob_rows:
+            votes.append({"model": model_name, "available": False})
+            continue
+        probs = {
+            cls: float(np.mean([row.get(cls, 0.0) for row in prob_rows]))
+            for cls in ("misinformation", "reliable")
+        }
+        label = max(probs, key=probs.get)
+        votes.append(
+            {
+                "model": model_name,
+                "label": label,
+                "confidence": probs[label],
+                "probs": probs,
+                "available": True,
+                "segments": len(prob_rows),
+            }
+        )
+
+    available = [vote for vote in votes if vote["available"]]
+    if not available:
+        return None
+    misinfo_votes = sum(vote["label"] == "misinformation" for vote in available)
+    return {
+        "label": "misinformation" if misinfo_votes * 2 >= len(available) else "reliable",
+        "votes": votes,
+        "misinfo_votes": misinfo_votes,
+        "n_models": len(available),
+        "mean_misinfo_prob": float(np.mean([vote["probs"]["misinformation"] for vote in available])),
+        "chunks": len(chunks),
+        "words": len(body_words),
+    }
+
+
+def assess_url_risk(article_result: dict, claim_rows: list[dict]) -> dict:
+    reasons: list[str] = []
+    score = 0
+    n_models = article_result["n_models"]
+    misinfo_votes = article_result["misinfo_votes"]
+    mean_misinfo = article_result["mean_misinfo_prob"]
+    if article_result["label"] == "misinformation":
+        score += 2 if mean_misinfo >= 0.65 else 1
+        reasons.append(
+            f"{misinfo_votes}/{n_models} models classify the full article as misinformation "
+            f"(mean misinformation probability {mean_misinfo:.0%})."
+        )
+    else:
+        reasons.append(
+            f"{n_models - misinfo_votes}/{n_models} models classify the full article as reliable "
+            f"(mean misinformation probability {mean_misinfo:.0%})."
+        )
+
+    safety_hits = [row for row in claim_rows if row.get("safety_check")]
+    if safety_hits:
+        score += 2
+        reasons.append(
+            f"{len(safety_hits)} statement(s) match high-risk safety patterns such as unsafe treatments or unsupported cures."
+        )
+
+    if claim_rows:
+        flagged = sum(row["verdict"] == "Misinformation" for row in claim_rows)
+        share = flagged / len(claim_rows)
+        if share >= 0.5:
+            score += 2
+        elif share >= 0.25:
+            score += 1
+        reasons.append(f"{flagged} of {len(claim_rows)} extracted health claims were flagged as misinformation ({share:.0%}).")
+    else:
+        reasons.append("No standalone health claims were extracted, so the verdict relies on the article-level score.")
+
+    if score >= 4:
+        level, verdict = "High", "Likely Misinformation"
+    elif score >= 2:
+        level, verdict = "Elevated", "Mixed Signals - Review Recommended"
+    else:
+        level, verdict = "Low", "Likely Reliable"
+    return {"level": level, "verdict": verdict, "score": score, "reasons": reasons}
+
+
+def analyse_article(article: dict, primary_model: str) -> dict:
+    paragraphs = article["paragraphs"]
+    progress = st.progress(0.0, text="Scoring the full article with all models...")
+    article_result = score_article(article.get("title", ""), paragraphs)
+    if article_result is None:
+        progress.empty()
+        raise ValueError("No model files were available to analyse the article.")
+
+    sentences = split_sentences(paragraphs)
+    claims = candidate_claims(sentences)
+    claim_rows: list[dict] = []
+    for position, (index, sentence) in enumerate(claims, start=1):
+        progress.progress(position / (len(claims) + 1), text=f"Auditing claim {position}/{len(claims)}...")
+        result = predict_ensemble(sentence)
+        if result is None:
+            continue
+        _, _, _, votes = result
+        selected, selected_model, _, verified_reason = select_decision_vote(votes, primary_model, sentence)
+        if selected is None:
+            continue
+        label = str(selected.get("label", ""))
+        available = [vote for vote in votes if vote.get("available")]
+        claim_rows.append(
+            {
+                "position": index + 1,
+                "claim": sentence,
+                "verdict": label.title(),
+                "confidence": round(float(selected.get("confidence", 0.0)), 4),
+                "agreement": f"{sum(vote.get('label') == label for vote in available)}/{len(available)}",
+                "decision_model": selected_model,
+                "safety_check": misinformation_safety_reason(sentence) or "",
+                "note": verified_reason or "",
+            }
+        )
+    progress.empty()
+
+    scope_text = " ".join([article.get("title", ""), article.get("description", "")] + paragraphs[:3])
+    return {
+        "article": {
+            key: article.get(key, "")
+            for key in ("title", "description", "site_name", "final_url", "domain", "truncated")
+        },
+        "article_result": article_result,
+        "claims": claim_rows,
+        "sentences_scanned": len(sentences),
+        "risk": assess_url_risk(article_result, claim_rows),
+        "off_topic": health_scope_notice(scope_text) is not None,
+    }
+
+
+def render_url_report(report: dict) -> None:
+    article = report["article"]
+    article_result = report["article_result"]
+    risk = report["risk"]
+    claims = report["claims"]
+
+    card_class = {"High": "bad", "Elevated": "neutral", "Low": "good"}[risk["level"]]
+    label_class = {"High": "status-misinfo", "Elevated": "", "Low": "status-reliable"}[risk["level"]]
+    title = html.escape(article.get("title") or "Untitled page")
+    source = html.escape(article.get("site_name") or article.get("domain") or "Pasted text")
+    if article.get("final_url"):
+        source = (
+            f'<a href="{html.escape(article["final_url"], quote=True)}" target="_blank" '
+            f'rel="noopener noreferrer">{source}</a>'
+        )
+    reasons = "".join(f"<li>{html.escape(reason)}</li>" for reason in risk["reasons"])
+    st.markdown(
+        f'<div class="prediction-card {card_class}">'
+        f'<p class="prediction-label {label_class}">{html.escape(risk["verdict"])}</p>'
+        f'<p class="small-muted">Risk level: <strong>{risk["level"]}</strong> &middot; Source: {source}</p>'
+        f'<p class="small-muted"><strong>{title}</strong></p>'
+        f'<div class="rationale"><strong>Why this result?</strong><ul>{reasons}</ul>'
+        f"This is a decision-support signal from text classifiers, not a fact-check. "
+        f"Verify important health decisions with authoritative medical sources.</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    if report.get("off_topic"):
+        st.warning("This page does not look health-related, so the models may not be meaningful here.")
+    if article.get("truncated"):
+        st.caption("The page was larger than 3 MB, so only the first part was analysed.")
+
+    flagged = [row for row in claims if row["verdict"] == "Misinformation"]
+    share = len(flagged) / len(claims) if claims else 0.0
+    metric_cards = [
+        (
+            "Article Verdict",
+            article_result["label"].title(),
+            f"{article_result['misinfo_votes']}/{article_result['n_models']} models flag misinformation",
+        ),
+        ("Claims Audited", f"{len(claims)}", f"Selected from {report['sentences_scanned']} sentences"),
+        ("Flagged Claims", f"{len(flagged)}", f"{share:.0%} of audited claims"),
+        ("Words Analysed", f"{article_result['words']:,}", f"{article_result['chunks']} transformer segment(s)"),
+    ]
+    st.markdown(
+        '<div class="evidence-grid">'
+        + "".join(
+            f'<div class="evidence-card"><div class="evidence-label">{html.escape(label)}</div>'
+            f'<div class="evidence-value">{html.escape(value)}</div>'
+            f'<div class="evidence-note">{html.escape(note)}</div></div>'
+            for label, value, note in metric_cards
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<p class="eyebrow">Article-Level Model Signals</p>', unsafe_allow_html=True)
+    vote_cards = []
+    for vote in article_result["votes"]:
+        model_name = html.escape(vote["model"])
+        if not vote.get("available"):
+            vote_cards.append(
+                f'<div class="vote-card"><div class="vote-model">{model_name}</div>'
+                f'<div class="vote-label small-muted">Unavailable</div></div>'
+            )
+            continue
+        vote_class = "status-reliable" if vote["label"] == "reliable" else "status-misinfo"
+        scope = "full text" if vote["model"] == "TF-IDF + LR" else f"avg of {vote['segments']} segment(s)"
+        vote_cards.append(
+            f'<div class="vote-card"><div class="vote-model">{model_name}</div>'
+            f'<div class="vote-label {vote_class}">{html.escape(vote["label"].title())}</div>'
+            f'<div class="small-muted">{vote["confidence"]:.1%} &middot; {scope}</div></div>'
+        )
+    st.markdown(f'<div class="vote-grid">{"".join(vote_cards)}</div>', unsafe_allow_html=True)
+
+    if flagged:
+        st.markdown('<p class="eyebrow">Flagged Claims</p>', unsafe_allow_html=True)
+        for row in sorted(flagged, key=lambda item: item["confidence"], reverse=True)[:5]:
+            detail = row["safety_check"] or row["note"] or f"{row['decision_model']} | agreement {row['agreement']}"
+            st.markdown(
+                f'<div class="example-card"><div class="example-status status-misinfo">'
+                f'Misinformation &middot; {row["confidence"]:.0%}</div>'
+                f'<p>{html.escape(row["claim"])}</p>'
+                f'<div class="small-muted">{html.escape(detail)}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+    if claims:
+        claims_frame = pd.DataFrame(claims)
+        with st.expander(f"All audited claims ({len(claims)})", expanded=not flagged):
+            st.dataframe(
+                claims_frame[["position", "claim", "verdict", "confidence", "agreement", "decision_model", "note"]],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "position": st.column_config.NumberColumn("Sentence #", width="small"),
+                    "claim": st.column_config.TextColumn("Claim", width="large"),
+                    "verdict": st.column_config.TextColumn("Verdict"),
+                    "confidence": st.column_config.ProgressColumn("Confidence", min_value=0.0, max_value=1.0, format="%.2f"),
+                    "agreement": st.column_config.TextColumn("Model agreement"),
+                    "decision_model": st.column_config.TextColumn("Decision model"),
+                    "note": st.column_config.TextColumn("Context check"),
+                },
+            )
+        export = claims_frame.assign(
+            article_title=article.get("title", ""),
+            article_url=article.get("final_url", ""),
+            article_verdict=article_result["label"],
+            overall_risk=risk["level"],
+        )
+        st.download_button(
+            "Download claim audit as CSV",
+            export.to_csv(index=False),
+            file_name="url_claim_audit.csv",
+            mime="text/csv",
+            key="url_download",
+        )
+
+
+def url_analysis_tab() -> None:
+    primary_model = best_accuracy_model()
+    section_heading(
+        "Website & Article Analysis",
+        "Paste a link to any health news article or webpage to extract claims and audit them with NLP models",
+    )
+
+    left, right = st.columns([2.2, 1.1], gap="large")
+    with left:
+        with st.container(border=True):
+            source = st.radio(
+                "Source",
+                ["Website link", "Paste article text"],
+                horizontal=True,
+                key="url_source",
+                label_visibility="collapsed",
+            )
+            url_value = pasted_title = pasted_text = ""
+            if source == "Website link":
+                url_value = st.text_input(
+                    "Article link",
+                    key="url_input",
+                    placeholder="https://www.example.com/health/article",
+                )
+            else:
+                pasted_title = st.text_input("Headline (optional)", key="url_paste_title")
+                pasted_text = st.text_area(
+                    "Article text",
+                    key="url_paste_text",
+                    height=180,
+                    placeholder="Paste the article body here...",
+                )
+            btn_col, reset_col, _ = st.columns([1.2, 0.7, 3.0])
+            run = btn_col.button("Analyse Article", type="primary", key="url_run")
+            if reset_col.button("Reset", key="url_reset"):
+                for key in ("url_input", "url_paste_title", "url_paste_text", "url_report"):
+                    st.session_state.pop(key, None)
+                st.rerun()
+
+        if run:
+            try:
+                if source == "Website link":
+                    url = normalize_input_url(url_value)
+                    with st.spinner("Fetching and extracting the article..."):
+                        article = dict(fetch_url_article(url))
+                else:
+                    article = {
+                        "title": pasted_title.strip(),
+                        "description": "",
+                        "site_name": "",
+                        "paragraphs": paragraphs_from_text(pasted_text),
+                        "final_url": "",
+                        "domain": "Pasted text",
+                        "truncated": False,
+                    }
+                word_count = sum(len(paragraph.split()) for paragraph in article["paragraphs"])
+                if word_count < URL_MIN_ARTICLE_WORDS:
+                    raise ValueError(
+                        "Not enough readable article text was found. The page may need JavaScript or a login; "
+                        "try 'Paste article text' instead."
+                        if source == "Website link"
+                        else f"Paste at least {URL_MIN_ARTICLE_WORDS} words of article text."
+                    )
+                st.session_state.url_report = analyse_article(article, primary_model)
+            except ValueError as exc:
+                st.session_state.pop("url_report", None)
+                st.error(str(exc))
+
+        report = st.session_state.get("url_report")
+        if report:
+            render_url_report(report)
+
+    with right:
+        st.markdown('<p class="eyebrow">Quick Test Samples</p>', unsafe_allow_html=True)
+        if st.button("Sample: MMR Vaccine Fact-Sheet", key="quick_sample_1", use_container_width=True):
+            st.session_state.url_source = "Paste article text"
+            st.session_state.url_paste_title = "CDC Evidence on Measles and Vaccine Safety"
+            st.session_state.url_paste_text = (
+                "The MMR vaccine is safe and highly effective at preventing measles, mumps, and rubella. "
+                "Two doses of MMR vaccine are 97% effective at preventing measles and 88% effective at preventing mumps. "
+                "Numerous rigorous scientific studies involving millions of children have found no link between the MMR vaccine and autism. "
+                "Vaccination protects vulnerable populations by creating community immunity and preventing deadly viral outbreaks. "
+                "Clinical trials show that side effects are generally mild, such as temporary low-grade fever or soreness."
+            )
+            st.session_state.pop("url_report", None)
+            st.rerun()
+
+        if st.button("Sample: Miracle Cure Viral Post", key="quick_sample_2", use_container_width=True):
+            st.session_state.url_source = "Paste article text"
+            st.session_state.url_paste_title = "Miracle Mineral Solution: Dangerous Cure Claims"
+            st.session_state.url_paste_text = (
+                "Advocates claim that Miracle Mineral Solution, an industrial bleaching agent containing sodium chlorite, "
+                "cures autism, cancer, HIV, and COVID-19. Health authorities have warned that drinking this chemical is dangerous "
+                "and causes severe nausea, dehydration, and acute liver failure. There is no clinical evidence supporting its use as a cure. "
+                "Doctors urge the public to avoid consuming chlorine dioxide products for medical treatment."
+            )
+            st.session_state.pop("url_report", None)
+            st.rerun()
+
+        st.markdown('<p class="eyebrow" style="margin-top: 1.5rem;">Pipeline Architecture</p>', unsafe_allow_html=True)
+        steps = [
+            ("1 · Secure Ingestion", "Page is fetched securely with SSRF safeguards and clean readability extraction."),
+            ("2 · Full Article Scoring", "BioBERT and PubMedBERT score text segments; TF-IDF evaluates full context."),
+            ("3 · Claim Decomposition", f"Up to {URL_MAX_CLAIMS} distinct health claims are extracted and audited individually."),
+            ("4 · Explainable Risk Report", "Consensus voting, safety rules, and claim veracity form an audited risk score."),
+        ]
+        for title, note in steps:
+            st.markdown(
+                f'<div class="example-card"><div class="example-status">{html.escape(title)}</div>'
+                f"<p>{html.escape(note)}</p></div>",
+                unsafe_allow_html=True,
+            )
+        st.caption("Works on public news articles and blogs. Paywalled or JavaScript-heavy single-page apps can be checked using 'Paste article text'.")
+
+
 def model_comparison_tab() -> None:
     section_heading(
         "Model Comparison",
@@ -2649,13 +3359,18 @@ def validation_tab() -> None:
 inject_css()
 render_shell_open()
 
-tab_claim, tab_compare, tab_batch, tab_perf, tab_validation = st.tabs(
-    ["Claim Checker", "Model Comparison", "Batch Inference", "Performance", "Validation"]
+tab_claim, tab_url, tab_compare, tab_batch, tab_perf, tab_validation = st.tabs(
+    ["Claim Checker", "URL Analysis", "Model Comparison", "Batch Inference", "Performance", "Validation"]
 )
 
 with tab_claim:
     st.markdown('<div class="content">', unsafe_allow_html=True)
     claim_checker_tab()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with tab_url:
+    st.markdown('<div class="content">', unsafe_allow_html=True)
+    url_analysis_tab()
     st.markdown("</div>", unsafe_allow_html=True)
 
 with tab_compare:
