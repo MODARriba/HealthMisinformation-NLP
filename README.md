@@ -50,10 +50,11 @@ You can copy-paste and verify any of these claims directly in the web applicatio
 | **Nutritional Guidance** | *"Vitamin D3 supplementation may help support immune function during respiratory viral infections."* | 🟢 **Reliable** | Recognized as cautious, evidence-supported medical wording. |
 
 ### 🛠️ Interactive Capabilities in the Demo:
-- **Tab 1: Claim Checker** — Real-time classification using the best-performing model, with confidence meters, class probability breakdowns, and rationale explanations.
-- **Tab 2: Model Comparison** — Side-by-side inference pitting TF-IDF, BioBERT, and PubMedBERT against each other to visualize model agreement and divergence.
-- **Tab 3: Batch Inference** — Upload any CSV or TXT file of claims to audit up to 200 claims in one run, download predictions as CSV, and inspect confidence histograms.
-- **Tab 4: Performance Dashboard** — Live telemetry of held-out test metrics ($n = 1,317$), dynamic 2x2 confusion matrices, and the 8-bucket error distribution.
+- **Tab 1: Claim Checker & Scientific Grounding** — Real-time classification using the highest-accuracy biomedical model, token-level feature attribution highlighting specific trigger words, live PubMed / Europe PMC peer-reviewed literature retrieval via NCBI E-utilities, verified fact-checker grounding, and 1-click printable PDF audit export.
+- **Tab 2: Webpage & Article Audit** — Paste any health URL or text to scrape and segment the article, evaluate **Source Domain Credibility (0–100 Trust Index)** against authoritative medical registries, inspect claims via an interactive **Color-Coded Article Heatmap (XAI)** with hover tooltip inspection, extract token triggers, ground audited statements with peer-reviewed literature, and download comprehensive CSV / PDF fact-check reports.
+- **Tab 3: Model Comparison** — Side-by-side inference pitting TF-IDF, BioBERT, and PubMedBERT against each other to visualize model agreement and divergence.
+- **Tab 4: Batch Inference** — Upload any CSV or TXT file of claims to audit up to 200 claims in one run, download predictions as CSV, and inspect confidence histograms.
+- **Tab 5: Performance Dashboard** — Live telemetry of held-out test metrics ($n = 1,317$), dynamic 2x2 confusion matrices, and the 8-bucket error distribution.
 
 > **ℹ️ Cloud Availability & Cold Starts**: The live application runs in a containerized environment. If the container has been idle and enters a sleeping state, accessing either link will automatically wake the container (~30–45 seconds boot time) with full functionality restored for all public visitors.
 
