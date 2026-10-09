@@ -6,6 +6,7 @@ dashboard for single-claim, model-comparison, batch, and validation workflows.
 
 from __future__ import annotations
 
+import datetime
 import difflib
 import html
 import io
@@ -13,6 +14,7 @@ import ipaddress
 import json
 import re
 import socket
+import textwrap
 import urllib.error
 import urllib.request
 from html.parser import HTMLParser
@@ -131,6 +133,18 @@ MODEL_COLORS = {
     "PubMedBERT": "#26d0c3",
     "Majority Vote": "#2fd8ca",
 }
+
+CLAIM_CUE_RE = re.compile(
+    r"\b(cures?|prevents?|causes?|treats?|reduces?|increases?|risks?|kills?|boosts?|protects?|"
+    r"linked|links?|proven|proves?|shows?|study|studies|research|trials?|effective|safe|"
+    r"dangerous|harmful|toxic|heals?|reverses?|lowers?|improves?|fights?|eliminates?|detox|"
+    r"miracle|guaranteed|doctors?|scientists?|approved?|banned?)\b"
+)
+SENTENCE_SPLIT_RE = re.compile(
+    r"(?:(?<=[.!?])|(?<=[.!?][\"'\u201d\u2019)\]]))\s+(?=[\"'\u201c\u2018(\[]?[A-Z0-9])"
+)
+ABBREVIATION_END_RE = re.compile(r"\b(?:Dr|Mr|Mrs|Ms|Prof|St|Sr|Jr|vs|etc|e\.g|i\.e|U\.S|U\.K|No|Fig)\.$")
+
 
 
 def read_json(path: Path) -> dict:
@@ -1150,6 +1164,197 @@ def inject_css() -> None:
             background: var(--panel) !important;
             border: 1px solid var(--line) !important;
             border-radius: 8px !important;
+        }
+
+        /* XAI Token Attribution & Heatmap Styles */
+        .attribution-card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 16px 18px;
+            margin-top: 14px;
+            margin-bottom: 14px;
+        }
+
+        .tok-sentence-box {
+            font-size: 15px;
+            line-height: 1.85;
+            color: var(--text);
+            padding: 12px 14px;
+            background: #0b1117;
+            border: 1px solid var(--line-soft);
+            border-radius: 7px;
+            margin-bottom: 12px;
+        }
+
+        .tok-misinfo {
+            background-color: rgba(255, 90, 99, 0.22);
+            color: #ff858c;
+            border-bottom: 2px solid #ff5a63;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-weight: 650;
+            cursor: help;
+        }
+
+        .tok-reliable {
+            background-color: rgba(25, 209, 143, 0.20);
+            color: #4eedb0;
+            border-bottom: 2px solid #19d18f;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-weight: 650;
+            cursor: help;
+        }
+
+        .tok-neutral {
+            color: var(--text);
+        }
+
+        .tok-pill-group {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 8px;
+            font-size: 12px;
+        }
+
+        .tok-pill-label {
+            font-weight: 750;
+            color: var(--muted);
+            margin-right: 4px;
+        }
+
+        .tok-pill {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 11px;
+            font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+            font-weight: 700;
+        }
+
+        .pill-misinfo {
+            background: rgba(255, 90, 99, 0.16);
+            color: #ff858c;
+            border: 1px solid rgba(255, 90, 99, 0.35);
+        }
+
+        .pill-reliable {
+            background: rgba(25, 209, 143, 0.16);
+            color: #4eedb0;
+            border: 1px solid rgba(25, 209, 143, 0.35);
+        }
+
+        .tok-footnote {
+            font-size: 11px;
+            color: var(--muted);
+            margin-top: 8px;
+            line-height: 1.45;
+        }
+
+        .heatmap-wrapper {
+            margin-top: 14px;
+            margin-bottom: 18px;
+        }
+
+        .heatmap-box {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 16px 18px;
+            font-size: 14px;
+            line-height: 1.85;
+            color: #d1d9e2;
+            max-height: 480px;
+            overflow-y: auto;
+        }
+
+        .heatmap-para {
+            margin-bottom: 12px;
+        }
+
+        .heatmap-misinfo {
+            background-color: rgba(255, 90, 99, 0.22);
+            color: #ff858c;
+            border-bottom: 2px solid #ff5a63;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-weight: 550;
+            cursor: help;
+            transition: background-color 0.15s ease;
+        }
+
+        .heatmap-misinfo:hover {
+            background-color: rgba(255, 90, 99, 0.40);
+            color: #ffffff;
+        }
+
+        .heatmap-reliable {
+            background-color: rgba(25, 209, 143, 0.18);
+            color: #4eedb0;
+            border-bottom: 2px solid #19d18f;
+            padding: 2px 4px;
+            border-radius: 4px;
+            font-weight: 550;
+            cursor: help;
+            transition: background-color 0.15s ease;
+        }
+
+        .heatmap-reliable:hover {
+            background-color: rgba(25, 209, 143, 0.35);
+            color: #ffffff;
+        }
+
+        .heatmap-sup {
+            font-size: 10px;
+            margin-left: 2px;
+        }
+
+        .heatmap-context {
+            color: #9aa8b6;
+        }
+
+        .heatmap-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            align-items: center;
+            font-size: 11px;
+            color: var(--muted);
+            margin-bottom: 10px;
+        }
+
+        .heatmap-legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            display: inline-block;
+        }
+
+        .legend-dot.misinfo {
+            background-color: #ff5a63;
+        }
+
+        .legend-dot.reliable {
+            background-color: #19d18f;
+        }
+
+        .legend-dot.context {
+            background-color: #556270;
+        }
+
+        .heatmap-footnote {
+            font-size: 11px;
+            color: var(--muted);
+            margin-top: 8px;
         }
 
         @media (max-width: 760px) {
@@ -2283,6 +2488,204 @@ def render_model_signals(votes: list[dict] | None, primary_model: str) -> None:
     st.markdown(f'<div class="signal-list">{"".join(cards)}</div>', unsafe_allow_html=True)
 
 
+@st.cache_data(max_entries=128, show_spinner=False)
+def explain_tokens(claim_text: str) -> dict:
+    pipeline = load_tfidf()
+    if pipeline is None:
+        return {"tokens": [], "top_misinfo": [], "top_reliable": []}
+
+    try:
+        features = pipeline.named_steps.get("features")
+        clf = pipeline.named_steps.get("clf")
+        if features is None or clf is None:
+            return {"tokens": [], "top_misinfo": [], "top_reliable": []}
+
+        word_vec = features.transformer_list[0][1]
+        word_vocab = word_vec.vocabulary_
+        coef = clf.coef_[0]
+    except Exception:
+        return {"tokens": [], "top_misinfo": [], "top_reliable": []}
+
+    raw_tokens = re.findall(r"\w+|[^\w\s]", claim_text)
+    token_weights = []
+
+    common_stops = {
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+        "by", "from", "up", "about", "into", "over", "after", "is", "are", "was", "were",
+        "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could",
+        "will", "would", "shall", "should", "may", "might", "must", "it", "its", "this",
+        "that", "these", "those", "i", "you", "he", "she", "we", "they",
+    }
+
+    scored_words = []
+    for tok in raw_tokens:
+        clean = tok.lower().strip()
+        if not clean or not tok.isalnum():
+            token_weights.append({"token": tok, "weight": 0.0, "category": "punct", "clean": clean})
+            continue
+
+        idx = word_vocab.get(clean)
+        is_cue = bool(CLAIM_CUE_RE.search(clean))
+        is_safety = bool(misinformation_safety_reason(clean))
+
+        weight = 0.0
+        if idx is not None:
+            weight = float(coef[idx])
+
+        if clean in common_stops:
+            category = "neutral"
+            weight = 0.0
+        elif is_safety or (weight < -0.2 and not is_cue):
+            category = "misinfo"
+            scored_words.append((clean, weight, "misinfo"))
+        elif weight < -0.1 or (is_cue and weight <= 0.0):
+            category = "misinfo"
+            scored_words.append((clean, weight, "misinfo"))
+        elif weight > 0.15:
+            category = "reliable"
+            scored_words.append((clean, weight, "reliable"))
+        else:
+            category = "neutral"
+
+        token_weights.append({
+            "token": tok,
+            "weight": round(weight, 3),
+            "category": category,
+            "clean": clean,
+        })
+
+    unique_misinfo = sorted(
+        {item[0]: item for item in scored_words if item[2] == "misinfo"}.values(),
+        key=lambda x: x[1],
+    )[:5]
+    unique_reliable = sorted(
+        {item[0]: item for item in scored_words if item[2] == "reliable"}.values(),
+        key=lambda x: x[1],
+        reverse=True,
+    )[:5]
+
+    return {
+        "tokens": token_weights,
+        "top_misinfo": unique_misinfo,
+        "top_reliable": unique_reliable,
+    }
+
+
+def render_token_attribution(claim: str) -> None:
+    attribution = explain_tokens(claim)
+    tokens = attribution.get("tokens", [])
+    if not tokens:
+        return
+
+    spans = []
+    for tok_info in tokens:
+        tok = html.escape(tok_info["token"])
+        cat = tok_info["category"]
+        w = tok_info["weight"]
+        if cat == "misinfo":
+            spans.append(
+                f'<span class="tok-misinfo" title="Weight: {w:+.2f} (Pushes toward Misinformation)">{tok}</span>'
+            )
+        elif cat == "reliable":
+            spans.append(
+                f'<span class="tok-reliable" title="Weight: {w:+.2f} (Pushes toward Reliable)">{tok}</span>'
+            )
+        else:
+            spans.append(f'<span class="tok-neutral">{tok}</span>')
+
+    highlighted_html = " ".join(spans)
+    highlighted_html = re.sub(r"\s+([,.:;!?])", r"\1", highlighted_html)
+
+    top_misinfo = attribution.get("top_misinfo", [])
+    top_reliable = attribution.get("top_reliable", [])
+
+    badges_html = []
+    if top_misinfo:
+        pills = "".join(
+            f'<span class="tok-pill pill-misinfo">{html.escape(w)} ({score:+.2f})</span>'
+            for w, score, _ in top_misinfo
+        )
+        badges_html.append(f'<div class="tok-pill-group"><span class="tok-pill-label">🚨 Misinformation Triggers:</span>{pills}</div>')
+    if top_reliable:
+        pills = "".join(
+            f'<span class="tok-pill pill-reliable">{html.escape(w)} ({score:+.2f})</span>'
+            for w, score, _ in top_reliable
+        )
+        badges_html.append(f'<div class="tok-pill-group"><span class="tok-pill-label">🛡️ Reliability Anchors:</span>{pills}</div>')
+
+    st.markdown(
+        f'<div class="attribution-card">'
+        f'<p class="eyebrow">Explainable AI &middot; Token-Level Attribution</p>'
+        f'<div class="tok-sentence-box">{highlighted_html}</div>'
+        f'{"".join(badges_html)}'
+        f'<div class="tok-footnote">Feature contributions calculated via vocabulary log-odds and clinical claim cues. Hover over highlighted tokens for numerical feature attribution.</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def generate_pdf_single_claim(claim: str, selected_vote: dict, model_name: str, votes: list[dict]) -> bytes:
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        fig = plt.figure(figsize=(8.5, 11), facecolor="#ffffff")
+        fig.text(0.08, 0.94, "CLAIMCHECK AI | SINGLE CLAIM AUDIT REPORT", fontsize=15, weight="bold", color="#0f172a")
+        fig.text(0.08, 0.915, "Healthcare Misinformation Decision Support System", fontsize=9.5, color="#64748b")
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        fig.text(0.92, 0.94, f"AUDIT DATE: {now_str}", fontsize=8.5, color="#64748b", ha="right")
+        line = plt.Line2D([0.08, 0.92], [0.90, 0.90], color="#cbd5e1", lw=1.2, transform=fig.transFigure)
+        fig.add_artist(line)
+
+        fig.text(0.08, 0.855, "EVALUATED HEALTH STATEMENT:", fontsize=9, weight="bold", color="#334155")
+        claim_wrapped = textwrap.fill(claim, width=80)
+        fig.text(0.08, 0.825, claim_wrapped, fontsize=9.5, color="#0f172a", va="top")
+
+        fig.text(0.08, 0.73, "VERDICT & MODEL CONSENSUS:", fontsize=9, weight="bold", color="#334155")
+        verdict = selected_vote.get("label", "").title()
+        conf = float(selected_vote.get("confidence", 0.0))
+        color = "#dc2626" if verdict == "Misinformation" else "#16a34a"
+        fig.text(0.08, 0.695, f"{verdict.upper()} ({conf:.1%} confidence)", fontsize=13, weight="bold", color=color)
+        fig.text(0.08, 0.67, f"Primary Decision Model: {model_name}", fontsize=9, color="#475569")
+
+        fig.text(0.08, 0.61, "INDIVIDUAL MODEL SIGNALS", fontsize=10, weight="bold", color="#1e293b")
+        ax_models = fig.add_axes([0.08, 0.44, 0.84, 0.15])
+        ax_models.axis("off")
+        model_rows = []
+        for v in votes:
+            if v.get("available"):
+                override_text = " (Safety Override)" if v.get("override") else ""
+                model_rows.append([
+                    v["model"],
+                    v["label"].title() + override_text,
+                    f"{v['confidence']:.1%}",
+                ])
+            else:
+                model_rows.append([v["model"], "Unavailable", "N/A"])
+
+        mtbl = ax_models.table(
+            cellText=model_rows,
+            colLabels=["Model Architecture", "Classification", "Confidence"],
+            loc="center",
+            cellLoc="center",
+        )
+        mtbl.auto_set_font_size(False)
+        mtbl.set_fontsize(8.5)
+        mtbl.scale(1, 1.4)
+
+        fig.text(0.08, 0.06, "Disclaimer: Automated decision-support signal generated by clinical NLP models. Not medical advice.", fontsize=7.5, color="#94a3b8")
+        fig.text(0.92, 0.06, "ClaimCheck AI | Page 1 of 1", fontsize=7.5, color="#94a3b8", ha="right")
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+    return buf.getvalue()
+
+
 def claim_checker_tab() -> None:
     primary_model = best_accuracy_model()
     section_heading(
@@ -2330,7 +2733,6 @@ def claim_checker_tab() -> None:
                         selected_vote, selected_model, decision_note, _ = select_decision_vote(votes, primary_model, claim)
                         if selected_vote is None:
                             st.error("No model prediction was available.")
-                        else:
                             render_prediction(
                                 selected_vote["label"],
                                 float(selected_vote.get("confidence", 0.0)),
@@ -2338,6 +2740,15 @@ def claim_checker_tab() -> None:
                                 claim,
                                 model_name=selected_model,
                                 decision_note=decision_note,
+                            )
+                            render_token_attribution(claim)
+                            pdf_single = generate_pdf_single_claim(claim, selected_vote, selected_model, votes)
+                            st.download_button(
+                                "📄 Download Claim Fact-Check Audit PDF",
+                                pdf_single,
+                                file_name="ClaimCheckAI_Claim_Audit.pdf",
+                                mime="application/pdf",
+                                key="claim_download_pdf",
                             )
                             st.session_state.claim_model_signals = votes
                             st.session_state.claim_primary_model = selected_model
@@ -2364,16 +2775,6 @@ URL_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 ClaimCheckAI/1.0"
 )
-CLAIM_CUE_RE = re.compile(
-    r"\b(cures?|prevents?|causes?|treats?|reduces?|increases?|risks?|kills?|boosts?|protects?|"
-    r"linked|links?|proven|proves?|shows?|study|studies|research|trials?|effective|safe|"
-    r"dangerous|harmful|toxic|heals?|reverses?|lowers?|improves?|fights?|eliminates?|detox|"
-    r"miracle|guaranteed|doctors?|scientists?|approved?|banned?)\b"
-)
-SENTENCE_SPLIT_RE = re.compile(
-    r"(?:(?<=[.!?])|(?<=[.!?][\"'\u201d\u2019)\]]))\s+(?=[\"'\u201c\u2018(\[]?[A-Z0-9])"
-)
-ABBREVIATION_END_RE = re.compile(r"\b(?:Dr|Mr|Mrs|Ms|Prof|St|Sr|Jr|vs|etc|e\.g|i\.e|U\.S|U\.K|No|Fig)\.$")
 
 
 class ArticleTextExtractor(HTMLParser):
@@ -2809,8 +3210,11 @@ def analyse_article(article: dict, primary_model: str) -> dict:
     scope_text = " ".join([article.get("title", ""), article.get("description", "")] + paragraphs[:3])
     return {
         "article": {
-            key: article.get(key, "")
-            for key in ("title", "description", "site_name", "final_url", "domain", "truncated")
+            **{
+                key: article.get(key, "")
+                for key in ("title", "description", "site_name", "final_url", "domain", "truncated")
+            },
+            "paragraphs": paragraphs,
         },
         "article_result": article_result,
         "claims": claim_rows,
@@ -2818,6 +3222,202 @@ def analyse_article(article: dict, primary_model: str) -> dict:
         "risk": assess_url_risk(article_result, claim_rows),
         "off_topic": health_scope_notice(scope_text) is not None,
     }
+
+
+def render_article_heatmap(paragraphs: list[str], claims: list[dict]) -> str:
+    claim_map: dict[str, dict] = {}
+    for c in claims:
+        norm_key = normalize_claim_text(c.get("claim", ""))
+        claim_map[norm_key] = c
+        claim_map[c.get("claim", "").strip().lower()] = c
+
+    html_paragraphs: list[str] = []
+    for para in paragraphs:
+        pieces = [piece.strip() for piece in SENTENCE_SPLIT_RE.split(para) if piece.strip()]
+        merged_pieces: list[str] = []
+        for piece in pieces:
+            if merged_pieces and ABBREVIATION_END_RE.search(merged_pieces[-1]):
+                merged_pieces[-1] = f"{merged_pieces[-1]} {piece}"
+            else:
+                merged_pieces.append(piece)
+
+        rendered_sents: list[str] = []
+        for sent in merged_pieces:
+            sent_norm = normalize_claim_text(sent)
+            matched = claim_map.get(sent_norm) or claim_map.get(sent.strip().lower())
+            if matched:
+                verdict = matched.get("verdict", "Reliable")
+                conf = float(matched.get("confidence", 0.0))
+                model = matched.get("decision_model", "Ensemble")
+                note = matched.get("note") or matched.get("safety_check") or ""
+                extra = f" | {note}" if note else ""
+                tooltip = f"Verdict: {verdict} ({conf:.0%}) | Model: {model}{extra}"
+                css_cls = "heatmap-misinfo" if verdict == "Misinformation" else "heatmap-reliable"
+                badge = "🚨" if verdict == "Misinformation" else "🛡️"
+                rendered_sents.append(
+                    f'<span class="{css_cls}" title="{html.escape(tooltip)}">{html.escape(sent)} <sup class="heatmap-sup">{badge}</sup></span>'
+                )
+            else:
+                rendered_sents.append(f'<span class="heatmap-context">{html.escape(sent)}</span>')
+
+        html_paragraphs.append(f'<p class="heatmap-para">{" ".join(rendered_sents)}</p>')
+
+    legend_html = (
+        '<div class="heatmap-legend">'
+        '<span class="heatmap-legend-item"><span class="legend-dot misinfo"></span> <strong>Flagged Claim</strong> (Misinformation)</span>'
+        '<span class="heatmap-legend-item"><span class="legend-dot reliable"></span> <strong>Verified Claim</strong> (Reliable)</span>'
+        '<span class="heatmap-legend-item"><span class="legend-dot context"></span> Background / Context sentence</span>'
+        '</div>'
+    )
+    return (
+        f'<div class="heatmap-wrapper">'
+        f'{legend_html}'
+        f'<div class="heatmap-box">{"".join(html_paragraphs)}</div>'
+        f'<div class="heatmap-footnote">💡 Hover over any highlighted statement to view its classification confidence, decision model, and contextual notes.</div>'
+        f'</div>'
+    )
+
+
+def generate_pdf_fact_check_report(report: dict) -> bytes:
+    import io
+    import textwrap
+    import datetime
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    article = report.get("article", {})
+    article_result = report.get("article_result", {})
+    risk = report.get("risk", {})
+    claims = report.get("claims", [])
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        fig = plt.figure(figsize=(8.5, 11), facecolor="#ffffff")
+        fig.text(0.08, 0.94, "CLAIMCHECK AI | CLINICAL NLP FACT-CHECK AUDIT", fontsize=15, weight="bold", color="#0f172a")
+        fig.text(0.08, 0.92, "Healthcare Misinformation Decision Support System", fontsize=9.5, color="#64748b")
+        now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        fig.text(0.92, 0.94, f"AUDIT DATE: {now_str}", fontsize=8.5, color="#64748b", ha="right")
+        line = plt.Line2D([0.08, 0.92], [0.905, 0.905], color="#cbd5e1", lw=1.2, transform=fig.transFigure)
+        fig.add_artist(line)
+
+        meta_y = 0.875
+        fig.text(0.08, meta_y, "ARTICLE HEADLINE:", fontsize=8.5, weight="bold", color="#334155")
+        raw_title = article.get("title") or "Untitled Webpage"
+        fig.text(0.26, meta_y, textwrap.shorten(raw_title, width=70, placeholder="..."), fontsize=8.5, color="#0f172a")
+
+        fig.text(0.08, meta_y - 0.022, "SOURCE DOMAIN:", fontsize=8.5, weight="bold", color="#334155")
+        domain_str = article.get("domain") or article.get("site_name") or "Direct Text Ingestion"
+        fig.text(0.26, meta_y - 0.022, textwrap.shorten(domain_str, width=70, placeholder="..."), fontsize=8.5, color="#0f172a")
+
+        fig.text(0.08, meta_y - 0.044, "OVERALL RISK LEVEL:", fontsize=8.5, weight="bold", color="#334155")
+        risk_level = risk.get("level", "Unknown")
+        risk_verdict = risk.get("verdict", "Unknown")
+        risk_color = "#dc2626" if risk_level == "High" else ("#d97706" if risk_level == "Elevated" else "#16a34a")
+        fig.text(0.26, meta_y - 0.044, f"{risk_level.upper()} - {risk_verdict}", fontsize=9, weight="bold", color=risk_color)
+
+        fig.text(0.08, meta_y - 0.066, "CONSENSUS SUMMARY:", fontsize=8.5, weight="bold", color="#334155")
+        consensus_text = f"{article_result.get('misinfo_votes', 0)}/{article_result.get('n_models', 3)} models flag misinformation (Mean prob {article_result.get('mean_misinfo_prob', 0):.0%})"
+        fig.text(0.26, meta_y - 0.066, consensus_text, fontsize=8.5, color="#0f172a")
+
+        fig.text(0.08, 0.77, "MODEL CONSENSUS BREAKDOWN", fontsize=10, weight="bold", color="#1e293b")
+        ax_models = fig.add_axes([0.08, 0.66, 0.84, 0.095])
+        ax_models.axis("off")
+        model_rows = []
+        for v in article_result.get("votes", []):
+            if v.get("available"):
+                scope_str = "Full Text" if v["model"] == "TF-IDF + LR" else f"{v.get('segments', 1)} Segments"
+                model_rows.append([
+                    v["model"],
+                    v["label"].title(),
+                    f"{v['confidence']:.1%}",
+                    scope_str,
+                ])
+            else:
+                model_rows.append([v["model"], "Unavailable", "N/A", "N/A"])
+
+        if model_rows:
+            mtbl = ax_models.table(
+                cellText=model_rows,
+                colLabels=["Model Architecture", "Classification", "Confidence", "Scope"],
+                loc="center",
+                cellLoc="center",
+            )
+            mtbl.auto_set_font_size(False)
+            mtbl.set_fontsize(8)
+            mtbl.scale(1, 1.25)
+
+        fig.text(0.08, 0.625, f"AUDITED HEALTH CLAIMS ({len(claims)} Extracted)", fontsize=10, weight="bold", color="#1e293b")
+        ax_claims = fig.add_axes([0.08, 0.13, 0.84, 0.47])
+        ax_claims.axis("off")
+        claim_table_rows = []
+        for c in claims[:12]:
+            short_claim = textwrap.shorten(c["claim"], width=52, placeholder="...")
+            claim_table_rows.append([
+                f"#{c['position']}",
+                short_claim,
+                c["verdict"],
+                f"{c['confidence']:.1%}",
+                c.get("agreement", "N/A"),
+                c.get("decision_model", "Ensemble"),
+            ])
+
+        if claim_table_rows:
+            ctbl = ax_claims.table(
+                cellText=claim_table_rows,
+                colLabels=["#", "Claim Statement Excerpt", "Verdict", "Conf", "Consensus", "Model"],
+                loc="center",
+                cellLoc="left",
+            )
+            ctbl.auto_set_font_size(False)
+            ctbl.set_fontsize(7.5)
+            ctbl.scale(1, 1.35)
+
+        fig.text(0.08, 0.045, "Legal & Methodological Disclaimer: Automated decision-support signal generated by clinical NLP models. Not medical advice.", fontsize=7, color="#94a3b8")
+        fig.text(0.92, 0.045, "ClaimCheck AI | Page 1", fontsize=7, color="#94a3b8", ha="right")
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+
+        if len(claims) > 12:
+            fig2 = plt.figure(figsize=(8.5, 11), facecolor="#ffffff")
+            fig2.text(0.08, 0.94, "CLAIMCHECK AI | EXTENDED HEALTH CLAIMS AUDIT", fontsize=14, weight="bold", color="#0f172a")
+            fig2.text(0.08, 0.92, f"Target: {textwrap.shorten(raw_title, width=70, placeholder='...')}", fontsize=9, color="#64748b")
+            line2 = plt.Line2D([0.08, 0.92], [0.905, 0.905], color="#cbd5e1", lw=1.2, transform=fig2.transFigure)
+            fig2.add_artist(line2)
+
+            ax_claims2 = fig2.add_axes([0.08, 0.15, 0.84, 0.72])
+            ax_claims2.axis("off")
+            claim_table_rows2 = []
+            for c in claims[12:32]:
+                short_claim = textwrap.shorten(c["claim"], width=52, placeholder="...")
+                claim_table_rows2.append([
+                    f"#{c['position']}",
+                    short_claim,
+                    c["verdict"],
+                    f"{c['confidence']:.1%}",
+                    c.get("agreement", "N/A"),
+                    c.get("decision_model", "Ensemble"),
+                ])
+            if claim_table_rows2:
+                ctbl2 = ax_claims2.table(
+                    cellText=claim_table_rows2,
+                    colLabels=["#", "Claim Statement Excerpt", "Verdict", "Conf", "Consensus", "Model"],
+                    loc="center",
+                    cellLoc="left",
+                )
+                ctbl2.auto_set_font_size(False)
+                ctbl2.set_fontsize(7.5)
+                ctbl2.scale(1, 1.35)
+
+            fig2.text(0.08, 0.045, "Legal & Methodological Disclaimer: Automated decision-support signal generated by clinical NLP models. Not medical advice.", fontsize=7, color="#94a3b8")
+            fig2.text(0.92, 0.045, "ClaimCheck AI | Page 2", fontsize=7, color="#94a3b8", ha="right")
+
+            pdf.savefig(fig2, bbox_inches="tight")
+            plt.close(fig2)
+
+    return buf.getvalue()
 
 
 def render_url_report(report: dict) -> None:
@@ -2895,15 +3495,30 @@ def render_url_report(report: dict) -> None:
         )
     st.markdown(f'<div class="vote-grid">{"".join(vote_cards)}</div>', unsafe_allow_html=True)
 
+    # Interactive Article Text Heatmap (XAI)
+    if article.get("paragraphs"):
+        st.markdown('<p class="eyebrow">Interactive Article Text Heatmap (XAI)</p>', unsafe_allow_html=True)
+        heatmap_markup = render_article_heatmap(article.get("paragraphs", []), claims)
+        st.markdown(heatmap_markup, unsafe_allow_html=True)
+
     if flagged:
-        st.markdown('<p class="eyebrow">Flagged Claims</p>', unsafe_allow_html=True)
+        st.markdown('<p class="eyebrow">Flagged Claims & Key Misinformation Triggers</p>', unsafe_allow_html=True)
         for row in sorted(flagged, key=lambda item: item["confidence"], reverse=True)[:5]:
             detail = row["safety_check"] or row["note"] or f"{row['decision_model']} | agreement {row['agreement']}"
+            tok_attr = explain_tokens(row["claim"])
+            trigger_pills = ""
+            if tok_attr.get("top_misinfo"):
+                pills = " ".join(
+                    f'<span class="tok-pill pill-misinfo">{html.escape(w)} ({score:+.2f})</span>'
+                    for w, score, _ in tok_attr["top_misinfo"][:4]
+                )
+                trigger_pills = f'<div class="tok-pill-group" style="margin-top: 0.45rem;"><span class="tok-pill-label">Triggers:</span>{pills}</div>'
             st.markdown(
                 f'<div class="example-card"><div class="example-status status-misinfo">'
                 f'Misinformation &middot; {row["confidence"]:.0%}</div>'
                 f'<p>{html.escape(row["claim"])}</p>'
-                f'<div class="small-muted">{html.escape(detail)}</div></div>',
+                f'<div class="small-muted">{html.escape(detail)}</div>'
+                f'{trigger_pills}</div>',
                 unsafe_allow_html=True,
             )
 
@@ -2930,13 +3545,26 @@ def render_url_report(report: dict) -> None:
             article_verdict=article_result["label"],
             overall_risk=risk["level"],
         )
-        st.download_button(
-            "Download claim audit as CSV",
-            export.to_csv(index=False),
-            file_name="url_claim_audit.csv",
-            mime="text/csv",
-            key="url_download",
-        )
+        d_col1, d_col2 = st.columns(2)
+        with d_col1:
+            st.download_button(
+                "📥 Download Claim Audit as CSV",
+                export.to_csv(index=False),
+                file_name="url_claim_audit.csv",
+                mime="text/csv",
+                key="url_download_csv",
+                use_container_width=True,
+            )
+        with d_col2:
+            pdf_bytes = generate_pdf_fact_check_report(report)
+            st.download_button(
+                "📄 Download Fact-Check Report (PDF)",
+                pdf_bytes,
+                file_name="ClaimCheckAI_FactCheck_Audit.pdf",
+                mime="application/pdf",
+                key="url_download_pdf",
+                use_container_width=True,
+            )
 
 
 def url_analysis_tab() -> None:
