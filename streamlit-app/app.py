@@ -4561,6 +4561,155 @@ def chunk_youtube_transcript(snippets: list, max_words_per_chunk: int = 30) -> l
     return statements
 
 
+def timestamp_to_seconds(ts: str) -> float:
+    parts = [float(p) for p in ts.strip("[]").split(":")]
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    elif len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    return 0.0
+
+
+def human_readable_transcript_error(exc: Exception) -> str:
+    err_str = str(exc)
+    err_name = type(exc).__name__
+    if "TranscriptsDisabled" in err_name or "Subtitles are disabled" in err_str:
+        return "Subtitles and closed captions are disabled by the video owner on YouTube."
+    if "NoTranscriptFound" in err_name:
+        return "No English transcript or subtitles were found for this video on YouTube."
+    if "VideoUnavailable" in err_name:
+        return "This video is private, removed, or unavailable."
+    if any(term in err_str or term in err_name for term in ["IpBlocked", "RequestBlocked", "SSLError", "UNEXPECTED_EOF", "Max retries exceeded", "PoTokenRequired"]):
+        return "YouTube's bot protection blocked automated cloud scraping from the hosting server (or subtitles are disabled for this video)."
+    return f"Automated caption fetch failed: {err_str[:120]}"
+
+
+def parse_pasted_transcript(raw_text: str, max_words_per_chunk: int = 32) -> list[dict]:
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+    if not lines:
+        return []
+
+    time_re = re.compile(r"^\[?(\d{1,2}:(?:\d{2}:)?\d{2})\]?$")
+    inline_time_re = re.compile(r"^\[?(\d{1,2}:(?:\d{2}:)?\d{2})\]?\s+(.+)$")
+
+    snippets = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = time_re.match(line)
+        if m and i + 1 < len(lines):
+            ts_str = m.group(1)
+            sec = timestamp_to_seconds(ts_str)
+            text = lines[i + 1]
+            snippets.append({"text": text, "start": sec, "duration": 4.0})
+            i += 2
+            continue
+        m_inline = inline_time_re.match(line)
+        if m_inline:
+            ts_str = m_inline.group(1)
+            sec = timestamp_to_seconds(ts_str)
+            text = m_inline.group(2)
+            snippets.append({"text": text, "start": sec, "duration": 4.0})
+            i += 1
+            continue
+        snippets.append({"text": line, "start": -1.0, "duration": 4.0})
+        i += 1
+
+    has_ts = any(s["start"] >= 0 for s in snippets)
+    if has_ts:
+        curr_time = 0.0
+        for s in snippets:
+            if s["start"] >= 0:
+                curr_time = s["start"]
+            else:
+                s["start"] = curr_time
+                curr_time += 4.0
+        return chunk_youtube_transcript(snippets, max_words_per_chunk=max_words_per_chunk)
+    else:
+        full_text = " ".join(lines)
+        sents = split_sentences([full_text])
+        if not sents:
+            sents = [full_text]
+        statements = []
+        curr_time = 0.0
+        for s in sents:
+            statements.append({
+                "statement": s,
+                "start": curr_time,
+                "duration": 5.0,
+                "timestamp": format_seconds(curr_time),
+            })
+            curr_time += max(3.0, len(s.split()) * 0.4)
+        return statements
+
+
+def audit_transcript_statements(chunks: list[dict], primary_model: str, video_id: str = "", source_title: str = "") -> dict:
+    audited_claims = []
+    eval_chunks = chunks[:35]
+    claim_texts = [c["statement"] for c in eval_chunks]
+    batch_results = predict_ensemble_batch(claim_texts)
+
+    for idx, (c, res) in enumerate(zip(eval_chunks, batch_results), start=1):
+        if res is None:
+            continue
+        _, _, _, votes = res
+        stmt_text = c["statement"]
+        selected, sel_model, _, verified_reason = select_decision_vote(votes, primary_model, stmt_text)
+        if selected is None:
+            continue
+        label = str(selected.get("label", ""))
+        available = [v for v in votes if v.get("available")]
+        audited_claims.append({
+            "position": idx,
+            "timestamp": c["timestamp"],
+            "start": c["start"],
+            "statement": stmt_text,
+            "verdict": label.title(),
+            "confidence": round(float(selected.get("confidence", 0.0)), 4),
+            "agreement": f"{sum(v.get('label') == label for v in available)}/{len(available)}",
+            "decision_model": sel_model,
+            "safety_check": misinformation_safety_reason(stmt_text) or "",
+            "note": verified_reason or "",
+        })
+
+    total_secs = max([c["start"] + c.get("duration", 0.0) for c in eval_chunks], default=0.0)
+    words_count = sum(len(c["statement"].split()) for c in eval_chunks)
+    flagged = [row for row in audited_claims if row["verdict"] == "Misinformation"]
+    safety_hits = [row for row in audited_claims if row.get("safety_check")]
+
+    risk_score = 0
+    reasons = []
+    if audited_claims:
+        share = len(flagged) / len(audited_claims)
+        if share >= 0.35:
+            risk_score += 3
+            reasons.append(f"{len(flagged)} of {len(audited_claims)} statements flagged as misinformation ({share:.0%}).")
+        elif share > 0.1:
+            risk_score += 1
+            reasons.append(f"{len(flagged)} of {len(audited_claims)} statements flagged as misinformation ({share:.0%}).")
+        else:
+            reasons.append(f"Majority of spoken dialogue ({len(audited_claims) - len(flagged)}/{len(audited_claims)}) is classified as reliable.")
+    if safety_hits:
+        risk_score += 2
+        reasons.append(f"{len(safety_hits)} statements triggered high-risk health safety alerts.")
+
+    if risk_score >= 3:
+        risk_level, risk_verdict = "High", "Likely Misinformation"
+    elif risk_score >= 1:
+        risk_level, risk_verdict = "Elevated", "Mixed Signals - Review Dialogue"
+    else:
+        risk_level, risk_verdict = "Low", "Likely Reliable"
+
+    return {
+        "video_id": video_id,
+        "source_title": source_title or (f"YouTube Video: {video_id}" if video_id else "Pasted Video Transcript"),
+        "duration_str": format_seconds(total_secs),
+        "words": words_count,
+        "claims": audited_claims,
+        "risk": {"level": risk_level, "verdict": risk_verdict, "score": risk_score, "reasons": reasons},
+    }
+
+
 def perform_image_ocr(image_bytes_or_pil) -> tuple[str, str]:
     if Image is None:
         return "", "Pillow (PIL) is not installed."
@@ -4590,6 +4739,7 @@ def perform_image_ocr(image_bytes_or_pil) -> tuple[str, str]:
         return "", f"Image parsing error: {exc}"
 
 
+@st.cache_data(show_spinner=False)
 def generate_pdf_video_audit(video_id: str, report: dict) -> bytes:
     import io
     import matplotlib
@@ -4609,7 +4759,8 @@ def generate_pdf_video_audit(video_id: str, report: dict) -> bytes:
 
         meta_y = 0.875
         fig.text(0.08, meta_y, "TARGET VIDEO URL:", fontsize=8.5, weight="bold", color="#334155")
-        fig.text(0.26, meta_y, f"https://www.youtube.com/watch?v={video_id}", fontsize=8.5, color="#0f172a")
+        target_display = f"https://www.youtube.com/watch?v={video_id}" if video_id else report.get("source_title", "Pasted Video Transcript")
+        fig.text(0.26, meta_y, target_display, fontsize=8.5, color="#0f172a")
 
         fig.text(0.08, meta_y - 0.022, "VIDEO TIMELINE:", fontsize=8.5, weight="bold", color="#334155")
         fig.text(0.26, meta_y - 0.022, f"Duration: {report.get('duration_str', 'N/A')} | Spoken Words: {report.get('words', 0):,}", fontsize=8.5, color="#0f172a")
@@ -4779,108 +4930,142 @@ def multimodal_media_tab() -> None:
         left, right = st.columns([2.2, 1.1], gap="large")
         with left:
             with st.container(border=True):
-                st.markdown('<div class="label" style="margin-bottom: 6px;">YouTube Video or Podcast Link</div>', unsafe_allow_html=True)
-                yt_url = st.text_input(
-                    "Video URL",
-                    key="yt_url_input",
-                    placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/...",
-                    label_visibility="collapsed",
+                sub_mode = st.radio(
+                    "Transcript Input Method",
+                    ["🌐 YouTube Video Link (Auto-Fetch)", "📋 Paste Transcript / Subtitles"],
+                    horizontal=True,
+                    key="yt_sub_mode",
                 )
-                btn_col, sample_col, reset_col = st.columns([1.2, 1.4, 0.8])
-                run_yt = btn_col.button("Audit Video", type="primary", key="yt_run_btn")
-                load_sample = sample_col.button("Try Sample Video", key="yt_sample_btn")
-                reset_yt = reset_col.button("Reset", key="yt_reset_btn")
 
-                if load_sample:
-                    st.session_state.yt_url_input = "https://www.youtube.com/watch?v=M7lc1UVf-VE"
-                    st.session_state.pop("yt_audit_report", None)
-                    st.rerun()
+                if sub_mode == "🌐 YouTube Video Link (Auto-Fetch)":
+                    st.markdown('<div class="label" style="margin-bottom: 6px;">YouTube Video or Podcast Link</div>', unsafe_allow_html=True)
+                    yt_url = st.text_input(
+                        "Video URL",
+                        key="yt_url_input",
+                        placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/...",
+                        label_visibility="collapsed",
+                    )
+                    btn_col, sample_col, reset_col = st.columns([1.2, 1.4, 0.8])
+                    run_yt = btn_col.button("Audit Video", type="primary", key="yt_run_btn")
+                    load_sample = sample_col.button("Try Sample Video", key="yt_sample_btn")
+                    reset_yt = reset_col.button("Reset", key="yt_reset_btn")
 
-                if reset_yt:
-                    st.session_state.pop("yt_url_input", None)
-                    st.session_state.pop("yt_audit_report", None)
-                    st.rerun()
+                    if load_sample:
+                        st.session_state.yt_url_input = "https://www.youtube.com/watch?v=M7lc1UVf-VE"
+                        st.session_state.pop("yt_audit_report", None)
+                        st.session_state.pop("yt_fetch_error", None)
+                        st.rerun()
 
-            if run_yt:
-                if not yt_url.strip():
-                    st.info("Please enter a YouTube link or click 'Try Sample Video'.")
-                else:
-                    video_id = extract_youtube_video_id(yt_url)
-                    if not video_id:
-                        st.error("Invalid YouTube URL or video ID. Please check the link and try again.")
-                    else:
-                        with st.spinner("Fetching subtitles and temporal alignment..."):
-                            try:
-                                snippets = fetch_youtube_transcript_snippets(video_id)
-                            except Exception as exc:
-                                st.error(f"Could not retrieve video captions: {exc}. Ensure the video has public English captions enabled.")
-                                snippets = None
+                    if reset_yt:
+                        st.session_state.pop("yt_url_input", None)
+                        st.session_state.pop("yt_audit_report", None)
+                        st.session_state.pop("yt_fetch_error", None)
+                        st.rerun()
 
-                        if snippets:
-                            progress = st.progress(0.0, text="Decomposing dialogue into statements...")
-                            chunks = chunk_youtube_transcript(snippets, max_words_per_chunk=32)
-                            audited_claims = []
-                            for idx, c in enumerate(chunks[:35], start=1):
-                                progress.progress(idx / min(len(chunks), 35), text=f"Auditing statement {idx}/{min(len(chunks), 35)}...")
-                                stmt_text = c["statement"]
-                                res = predict_ensemble(stmt_text)
-                                if res is None:
-                                    continue
-                                _, _, _, votes = res
-                                selected, sel_model, _, verified_reason = select_decision_vote(votes, primary_model, stmt_text)
-                                if selected is None:
-                                    continue
-                                label = str(selected.get("label", ""))
-                                available = [v for v in votes if v.get("available")]
-                                audited_claims.append({
-                                    "position": idx,
-                                    "timestamp": c["timestamp"],
-                                    "start": c["start"],
-                                    "statement": stmt_text,
-                                    "verdict": label.title(),
-                                    "confidence": round(float(selected.get("confidence", 0.0)), 4),
-                                    "agreement": f"{sum(v.get('label') == label for v in available)}/{len(available)}",
-                                    "decision_model": sel_model,
-                                    "safety_check": misinformation_safety_reason(stmt_text) or "",
-                                    "note": verified_reason or "",
-                                })
-                            progress.empty()
-
-                            total_secs = max([c["start"] + c["duration"] for c in chunks], default=0.0)
-                            words_count = sum(len(c["statement"].split()) for c in chunks)
-                            flagged = [row for row in audited_claims if row["verdict"] == "Misinformation"]
-                            safety_hits = [row for row in audited_claims if row.get("safety_check")]
-
-                            risk_score = 0
-                            reasons = []
-                            if audited_claims:
-                                share = len(flagged) / len(audited_claims)
-                                if share >= 0.35:
-                                    risk_score += 3
-                                    reasons.append(f"{len(flagged)} of {len(audited_claims)} statements flagged as misinformation ({share:.0%}).")
-                                elif share > 0.1:
-                                    risk_score += 1
-                                    reasons.append(f"{len(flagged)} of {len(audited_claims)} statements flagged as misinformation ({share:.0%}).")
-                                else:
-                                    reasons.append(f"Majority of spoken dialogue ({len(audited_claims) - len(flagged)}/{len(audited_claims)}) is classified as reliable.")
-                            if safety_hits:
-                                risk_score += 2
-                                reasons.append(f"{len(safety_hits)} statements triggered high-risk health safety alerts.")
-
-                            if risk_score >= 3:
-                                risk_level, risk_verdict = "High", "Likely Misinformation"
-                            elif risk_score >= 1:
-                                risk_level, risk_verdict = "Elevated", "Mixed Signals - Review Dialogue"
+                    if run_yt:
+                        if not yt_url.strip():
+                            st.info("Please enter a YouTube link or click 'Try Sample Video'.")
+                        else:
+                            video_id = extract_youtube_video_id(yt_url)
+                            if not video_id:
+                                st.error("Invalid YouTube URL or video ID. Please check the link and try again.")
                             else:
-                                risk_level, risk_verdict = "Low", "Likely Reliable"
+                                with st.spinner("Fetching subtitles and temporal alignment..."):
+                                    try:
+                                        snippets = fetch_youtube_transcript_snippets(video_id)
+                                        st.session_state.pop("yt_fetch_error", None)
+                                    except Exception as exc:
+                                        snippets = None
+                                        err_msg = human_readable_transcript_error(exc)
+                                        st.session_state.yt_fetch_error = {
+                                            "msg": err_msg,
+                                            "video_id": video_id,
+                                            "url": yt_url,
+                                        }
 
-                            st.session_state.yt_audit_report = {
-                                "video_id": video_id,
-                                "duration_str": format_seconds(total_secs),
-                                "words": words_count,
-                                "claims": audited_claims,
-                                "risk": {"level": risk_level, "verdict": risk_verdict, "score": risk_score, "reasons": reasons},
-                            }
+                                if snippets:
+                                    with st.spinner("Batch-auditing video dialogue across clinical models..."):
+                                        chunks = chunk_youtube_transcript(snippets, max_words_per_chunk=32)
+                                        st.session_state.yt_audit_report = audit_transcript_statements(
+                                            chunks, primary_model, video_id=video_id, source_title=f"YouTube Video: {video_id}"
+                                        )
+
+                else:
+                    # Paste Transcript Sub-mode
+                    st.markdown('<div class="label" style="margin-bottom: 6px;">Video URL or Title (Optional)</div>', unsafe_allow_html=True)
+                    paste_yt_url = st.text_input(
+                        "Video URL / Title",
+                        key="yt_paste_url",
+                        placeholder="e.g. https://youtu.be/h3mLav7p1v0 or COVID-19 News Briefing",
+                        label_visibility="collapsed",
+                    )
+                    st.markdown('<div class="label" style="margin-top: 10px; margin-bottom: 6px;">Video Transcript or Closed Captions</div>', unsafe_allow_html=True)
+                    paste_text = st.text_area(
+                        "Transcript Text",
+                        key="yt_paste_text",
+                        height=160,
+                        placeholder="Paste transcript here (supports YouTube timestamp format '0:00 text', '[01:15] text', or plain text paragraphs)...",
+                        label_visibility="collapsed",
+                    )
+                    btn_col, covid_sample_col, reset_col = st.columns([1.5, 1.8, 0.8])
+                    run_paste = btn_col.button("Audit Pasted Transcript", type="primary", key="yt_run_paste_btn")
+                    load_covid_sample = covid_sample_col.button("Load COVID News Sample", key="yt_covid_sample_btn")
+                    reset_paste = reset_col.button("Reset", key="yt_reset_paste_btn")
+
+                    if load_covid_sample:
+                        st.session_state.yt_paste_url = "https://www.youtube.com/watch?v=h3mLav7p1v0"
+                        st.session_state.yt_paste_text = (
+                            "0:00\nGood evening. Today public health authorities issued new guidance regarding COVID-19 transmission and clinical treatments.\n"
+                            "0:15\nPeer-reviewed clinical surveillance demonstrates that updated mRNA vaccines reduce hospitalization risk by over 80 percent.\n"
+                            "0:35\nHowever, viral social media posts claim that drinking chlorine dioxide or industrial bleach cures COVID-19 instantly.\n"
+                            "0:52\nToxicology experts warned that consuming chlorine dioxide causes acute renal failure, severe vomiting, and chemical burns.\n"
+                            "1:10\nDoctors urge the public to consult licensed medical professionals for FDA-approved antiviral therapies rather than unproven remedies."
+                        )
+                        st.session_state.pop("yt_audit_report", None)
+                        st.rerun()
+
+                    if reset_paste:
+                        st.session_state.pop("yt_paste_url", None)
+                        st.session_state.pop("yt_paste_text", None)
+                        st.session_state.pop("yt_audit_report", None)
+                        st.rerun()
+
+                    if run_paste:
+                        if not paste_text.strip():
+                            st.info("Please paste a transcript or click 'Load COVID News Sample'.")
+                        else:
+                            parsed_chunks = parse_pasted_transcript(paste_text)
+                            if not parsed_chunks:
+                                st.error("No readable dialogue could be extracted from the pasted text.")
+                            else:
+                                with st.spinner("Batch-auditing transcript statements across clinical models..."):
+                                    extracted_vid = extract_youtube_video_id(paste_yt_url) if paste_yt_url else ""
+                                    title_label = paste_yt_url.strip() if paste_yt_url.strip() else "Audited Video Transcript"
+                                    st.session_state.yt_audit_report = audit_transcript_statements(
+                                        parsed_chunks, primary_model, video_id=extracted_vid or "", source_title=title_label
+                                    )
+
+            if "yt_fetch_error" in st.session_state and sub_mode == "🌐 YouTube Video Link (Auto-Fetch)":
+                err = st.session_state.yt_fetch_error
+                st.warning(f"⚠️ **Could not auto-fetch captions:** {err['msg']}")
+                st.markdown(
+                    """
+                    <div style="background: rgba(38, 208, 195, 0.08); border: 1px solid rgba(38, 208, 195, 0.25); border-radius: 8px; padding: 12px 16px; margin-bottom: 14px;">
+                        <div style="font-weight: 700; color: #26d0c3; margin-bottom: 6px;">💡 Quick 10-Second Workaround:</div>
+                        <ol style="margin: 0; padding-left: 20px; font-size: 13px; color: var(--text);">
+                            <li>Open the video on YouTube.</li>
+                            <li>Click <strong>'...more'</strong> in the description box and select <strong>'Show transcript'</strong>.</li>
+                            <li>Copy the transcript text, switch to <strong>'Paste Transcript / Subtitles'</strong> above, and audit!</li>
+                        </ol>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                if st.button("📋 Switch to 'Paste Transcript' for this Video", key="yt_switch_btn", type="secondary"):
+                    st.session_state.yt_sub_mode = "📋 Paste Transcript / Subtitles"
+                    st.session_state.yt_paste_url = err["url"]
+                    st.session_state.pop("yt_fetch_error", None)
+                    st.rerun()
 
             if "yt_audit_report" in st.session_state:
                 rep = st.session_state.yt_audit_report
@@ -4893,22 +5078,33 @@ def multimodal_media_tab() -> None:
                 label_class = {"High": "status-misinfo", "Elevated": "", "Low": "status-reliable"}[risk["level"]]
                 reasons_html = "".join(f"<li>{html.escape(r)}</li>" for r in risk["reasons"])
 
-                st.markdown(
-                    f'<div class="video-meta-box">'
-                    f'<img src="https://img.youtube.com/vi/{html.escape(vid)}/hqdefault.jpg" class="video-meta-thumb" alt="Video Thumbnail" />'
-                    f'<div class="video-meta-info">'
-                    f'<div style="font-size: 13px; font-weight: 700; color: #e7edf5; margin-bottom: 4px;">YouTube Video Audit: {html.escape(vid)}</div>'
-                    f'<div style="font-size: 11px; color: var(--muted);">'
-                    f'Duration: <strong>{rep["duration_str"]}</strong> &middot; Spoken Words: <strong>{rep["words"]:,}</strong> &middot; '
-                    f'<a href="https://www.youtube.com/watch?v={html.escape(vid)}" target="_blank" rel="noopener noreferrer" style="color: #26d0c3;">Open on YouTube &rarr;</a>'
-                    f'</div></div></div>',
-                    unsafe_allow_html=True,
-                )
+                if vid:
+                    meta_html = (
+                        f'<div class="video-meta-box">'
+                        f'<img src="https://img.youtube.com/vi/{html.escape(vid)}/hqdefault.jpg" class="video-meta-thumb" alt="Video Thumbnail" />'
+                        f'<div class="video-meta-info">'
+                        f'<div style="font-size: 13px; font-weight: 700; color: #e7edf5; margin-bottom: 4px;">YouTube Video Audit: {html.escape(vid)}</div>'
+                        f'<div style="font-size: 11px; color: var(--muted);">'
+                        f'Duration: <strong>{rep["duration_str"]}</strong> &middot; Spoken Words: <strong>{rep["words"]:,}</strong> &middot; '
+                        f'<a href="https://www.youtube.com/watch?v={html.escape(vid)}" target="_blank" rel="noopener noreferrer" style="color: #26d0c3;">Open on YouTube &rarr;</a>'
+                        f'</div></div></div>'
+                    )
+                else:
+                    meta_html = (
+                        f'<div class="video-meta-box">'
+                        f'<div class="video-meta-thumb" style="display: flex; align-items: center; justify-content: center; font-size: 28px; background: rgba(38, 208, 195, 0.12); border-radius: 6px;">🎙️</div>'
+                        f'<div class="video-meta-info">'
+                        f'<div style="font-size: 13px; font-weight: 700; color: #e7edf5; margin-bottom: 4px;">{html.escape(rep.get("source_title", "Audited Video Transcript"))}</div>'
+                        f'<div style="font-size: 11px; color: var(--muted);">'
+                        f'Timeline: <strong>{rep["duration_str"]}</strong> &middot; Spoken Words: <strong>{rep["words"]:,}</strong>'
+                        f'</div></div></div>'
+                    )
+                st.markdown(meta_html, unsafe_allow_html=True)
 
                 st.markdown(
                     f'<div class="prediction-card {card_class}">'
                     f'<p class="prediction-label {label_class}">{html.escape(risk["verdict"])}</p>'
-                    f'<p class="small-muted">Risk level: <strong>{risk["level"]}</strong> &middot; Source: YouTube Video Audio Stream</p>'
+                    f'<p class="small-muted">Risk level: <strong>{risk["level"]}</strong> &middot; Source: Spoken Video Audio / Transcript</p>'
                     f'<div class="rationale"><strong>Why this result?</strong><ul>{reasons_html}</ul></div>'
                     f'</div>',
                     unsafe_allow_html=True,
@@ -4943,10 +5139,16 @@ def multimodal_media_tab() -> None:
                                 for w, score, _ in tok_attr["top_misinfo"][:4]
                             )
                             trigger_pills = f'<div class="tok-pill-group" style="margin-top: 0.45rem;"><span class="tok-pill-label">Triggers:</span>{pills}</div>'
-                        jump_url = f"https://www.youtube.com/watch?v={vid}&t={int(row['start'])}s"
+                        
+                        if vid:
+                            jump_url = f"https://www.youtube.com/watch?v={vid}&t={int(row['start'])}s"
+                            time_badge = f'<a href="{html.escape(jump_url, quote=True)}" target="_blank" rel="noopener noreferrer" class="timestamp-pill">▶ {row["timestamp"]}</a>'
+                        else:
+                            time_badge = f'<span class="timestamp-pill">⏱ {row["timestamp"]}</span>'
+
                         st.markdown(
                             f'<div class="example-card"><div class="example-status status-misinfo">'
-                            f'<a href="{html.escape(jump_url, quote=True)}" target="_blank" rel="noopener noreferrer" class="timestamp-pill">▶ {row["timestamp"]}</a> '
+                            f'{time_badge} '
                             f'Misinformation &middot; {row["confidence"]:.0%}</div>'
                             f'<p>{html.escape(row["statement"])}</p>'
                             f'{trigger_pills}</div>',
@@ -4985,11 +5187,12 @@ def multimodal_media_tab() -> None:
                         )
 
                     d_col1, d_col2 = st.columns(2)
+                    dl_name_tag = vid if vid else "transcript"
                     with d_col1:
                         st.download_button(
                             "📥 Download Video Audit as CSV",
                             c_frame.to_csv(index=False),
-                            file_name=f"youtube_{vid}_audit.csv",
+                            file_name=f"video_{dl_name_tag}_audit.csv",
                             mime="text/csv",
                             key="yt_dl_csv",
                             use_container_width=True,
@@ -4999,7 +5202,7 @@ def multimodal_media_tab() -> None:
                         st.download_button(
                             "📄 Download Video Audit PDF Report",
                             pdf_v,
-                            file_name=f"ClaimCheckAI_YouTube_{vid}_Audit.pdf",
+                            file_name=f"ClaimCheckAI_Video_{dl_name_tag}_Audit.pdf",
                             mime="application/pdf",
                             key="yt_dl_pdf",
                             use_container_width=True,
