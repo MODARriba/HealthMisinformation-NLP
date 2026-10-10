@@ -4951,7 +4951,7 @@ def multimodal_media_tab() -> None:
                     reset_yt = reset_col.button("Reset", key="yt_reset_btn")
 
                     if load_sample:
-                        st.session_state.yt_url_input = "https://www.youtube.com/watch?v=M7lc1UVf-VE"
+                        st.session_state.yt_url_input = "https://www.youtube.com/watch?v=BtN-goy9VOY"
                         st.session_state.pop("yt_audit_report", None)
                         st.session_state.pop("yt_fetch_error", None)
                         st.rerun()
