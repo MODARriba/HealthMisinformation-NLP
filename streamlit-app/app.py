@@ -1775,6 +1775,41 @@ def predict(model_name: str, text: str):
     return predict_transformer(model_name, text)
 
 
+def predict_transformer_batch(name: str, texts: list[str]) -> list[dict[str, float]] | None:
+    bundle = load_transformer(name)
+    if bundle is None or not texts:
+        return None
+    tokenizer, model, id2label = bundle
+    import torch
+
+    inputs = tokenizer(texts, return_tensors="pt", truncation=True, max_length=MAX_LENGTH, padding=True)
+    device = getattr(model, "device", None)
+    if device is not None:
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+    with torch.no_grad():
+        logits = model(**inputs).logits
+    rows = torch.softmax(logits, dim=-1).tolist()
+    return [
+        {id2label.get(i, ID2LABEL_FALLBACK[i]): float(p) for i, p in enumerate(row)}
+        for row in rows
+    ]
+
+
+def predict_tfidf_batch(texts: list[str]) -> list[dict[str, float]] | None:
+    pipeline = load_tfidf()
+    if pipeline is None or not texts:
+        return None
+    try:
+        matrix = pipeline.predict_proba(texts)
+        return [
+            {ID2LABEL_FALLBACK[i]: float(p) for i, p in enumerate(row)}
+            for row in matrix
+        ]
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"TF-IDF batch inference failed: {exc}")
+        return None
+
+
 def health_scope_notice(claim: str) -> str | None:
     claim_lower = " ".join(claim.lower().split())
     tokens = [token.strip(".,;:!?()[]{}\"'") for token in claim_lower.split()]
@@ -2185,74 +2220,100 @@ def reliable_context_reason(claim: str) -> str | None:
     return None
 
 
-def predict_ensemble(text: str):
-    rows = []
-    safety_reason = misinformation_safety_reason(text)
-    reliable_reason = reliable_context_reason(text) if safety_reason is None else None
+def predict_ensemble_batch(texts: list[str]) -> list[tuple[str, float, dict, list[dict]] | None]:
+    if not texts:
+        return []
+
+    batch_probs_by_model: dict[str, list[dict[str, float]] | None] = {}
     for model_name in MODEL_ORDER:
-        result = predict(model_name, text)
-        if result is None:
+        if model_name == "TF-IDF + LR":
+            batch_probs_by_model[model_name] = predict_tfidf_batch(texts)
+        else:
+            batch_probs_by_model[model_name] = predict_transformer_batch(model_name, texts)
+
+    results: list[tuple[str, float, dict, list[dict]] | None] = []
+    for idx, text in enumerate(texts):
+        safety_reason = misinformation_safety_reason(text)
+        reliable_reason = reliable_context_reason(text) if safety_reason is None else None
+        rows = []
+        for model_name in MODEL_ORDER:
+            prob_list = batch_probs_by_model.get(model_name)
+            if prob_list is None or idx >= len(prob_list) or not prob_list[idx]:
+                rows.append(
+                    {
+                        "model": model_name,
+                        "label": "unavailable",
+                        "confidence": 0.0,
+                        "probs": {},
+                        "available": False,
+                        "override": False,
+                        "override_reason": "",
+                        "original_label": "unavailable",
+                        "original_confidence": 0.0,
+                    }
+                )
+                continue
+            probs = prob_list[idx]
+            label = max(probs, key=probs.get)
+            confidence = probs[label]
+            original_label = label
+            original_confidence = confidence
+            override = False
+            override_reason = ""
+            if safety_reason and label != "misinformation":
+                override = True
+                override_reason = safety_reason
+                label = "misinformation"
+                confidence = max(float(probs.get("misinformation", 0.0)), 0.99)
+                probs = {"misinformation": 1.0, "reliable": 0.0}
+            elif reliable_reason and label != "reliable":
+                override = True
+                override_reason = reliable_reason
+                label = "reliable"
+                confidence = max(float(probs.get("reliable", 0.0)), 0.95)
+                probs = {"misinformation": 0.0, "reliable": 1.0}
+
             rows.append(
                 {
                     "model": model_name,
-                    "label": "unavailable",
-                    "confidence": 0.0,
-                    "probs": {},
-                    "available": False,
-                    "override": False,
+                    "label": label,
+                    "confidence": confidence,
+                    "probs": probs,
+                    "available": True,
+                    "override": override,
+                    "override_reason": override_reason,
+                    "original_label": original_label,
+                    "original_confidence": original_confidence,
                 }
             )
+
+        available = [row for row in rows if row["available"]]
+        if not available:
+            results.append(None)
             continue
-        label, confidence, probs = result
-        original_label = label
-        original_confidence = confidence
-        override = False
-        override_reason = ""
-        if safety_reason and label != "misinformation":
-            override = True
-            override_reason = safety_reason
-            label = "misinformation"
-            confidence = max(float(probs.get("misinformation", 0.0)), 0.99)
-            probs = {"misinformation": 1.0, "reliable": 0.0}
-        elif reliable_reason and label != "reliable":
-            override = True
-            override_reason = reliable_reason
-            label = "reliable"
-            confidence = max(float(probs.get("reliable", 0.0)), 0.95)
-            probs = {"misinformation": 0.0, "reliable": 1.0}
-        rows.append(
-            {
-                "model": model_name,
-                "label": label,
-                "confidence": confidence,
-                "probs": probs,
-                "available": True,
-                "override": override,
-                "override_reason": override_reason,
-                "original_label": original_label,
-                "original_confidence": original_confidence,
-            }
-        )
 
-    available = [row for row in rows if row["available"]]
-    if not available:
-        return None
+        counts = {
+            "misinformation": sum(row["label"] == "misinformation" for row in available),
+            "reliable": sum(row["label"] == "reliable" for row in available),
+        }
+        if counts["misinformation"] == counts["reliable"]:
+            final_label = "misinformation"
+        else:
+            final_label = max(counts, key=counts.get)
 
-    counts = {
-        "misinformation": sum(row["label"] == "misinformation" for row in available),
-        "reliable": sum(row["label"] == "reliable" for row in available),
-    }
-    if counts["misinformation"] == counts["reliable"]:
-        final_label = "misinformation"
-    else:
-        final_label = max(counts, key=counts.get)
+        confidence = counts[final_label] / len(available)
+        vote_share = {
+            "misinformation": counts["misinformation"] / len(available),
+            "reliable": counts["reliable"] / len(available),
+        }
+        results.append((final_label, confidence, vote_share, rows))
 
-    confidence = counts[final_label] / len(available)
-    vote_share = {
-        "misinformation": counts["misinformation"] / len(available),
-        "reliable": counts["reliable"] / len(available),
-    }
-    return final_label, confidence, vote_share, rows
+    return results
+
+
+def predict_ensemble(text: str):
+    res = predict_ensemble_batch([text])
+    return res[0] if res else None
 
 
 def prediction_explanation(claim: str, label: str) -> str:
@@ -3414,7 +3475,7 @@ URL_MAX_REDIRECTS = 5
 URL_MIN_ARTICLE_WORDS = 40
 URL_MAX_CLAIMS = 15
 ARTICLE_CHUNK_WORDS = 180
-ARTICLE_MAX_CHUNKS = 8
+ARTICLE_MAX_CHUNKS = 3
 URL_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36 ClaimCheckAI/1.0"
@@ -3663,6 +3724,20 @@ def split_sentences(paragraphs: list[str]) -> list[str]:
     return sentences
 
 
+CITATION_BOILERPLATE_RE = re.compile(
+    r"(?:doi:\s*10\.\d{4,}|\[doi\]|\[google scholar\]|\[crossref\]|\[pubmed\]|"
+    r"\bdata availability statement\b|\bdataset available\b|\bsupplementary material|"
+    r"\bassociated data\b|\bconflict of interest\b|\bcompeting interest\b|"
+    r"\bauthor(?:s)? contribution|\bfunding statement\b|\bfinancial disclosure\b|"
+    r"^\s*\d+\.\s*[A-Z][a-z]+.*?\b(?:19\d\d|20\d\d)\b)",
+    re.IGNORECASE,
+)
+
+
+def is_citation_or_boilerplate(text: str) -> bool:
+    return bool(CITATION_BOILERPLATE_RE.search(text.strip()))
+
+
 def candidate_claims(sentences: list[str], limit: int = URL_MAX_CLAIMS) -> list[tuple[int, str]]:
     """Pick the most claim-like, health-related sentences, returned in document order."""
     scored: list[tuple[float, int, str]] = []
@@ -3670,6 +3745,8 @@ def candidate_claims(sentences: list[str], limit: int = URL_MAX_CLAIMS) -> list[
     for index, sentence in enumerate(sentences):
         word_count = len(sentence.split())
         if word_count < 6 or word_count > 60 or sentence.rstrip().endswith("?"):
+            continue
+        if is_citation_or_boilerplate(sentence):
             continue
         key = normalize_claim_text(sentence)
         if key in seen:
@@ -3692,29 +3769,11 @@ def candidate_claims(sentences: list[str], limit: int = URL_MAX_CLAIMS) -> list[
             (float(len(CLAIM_CUE_RE.findall(sent.lower()))), idx, sent)
             for idx, sent in enumerate(sentences)
             if 6 <= len(sent.split()) <= 60
+            and not is_citation_or_boilerplate(sent)
+            and health_scope_notice(sent) is None
         ]
         top = sorted(fallback, key=lambda item: item[0], reverse=True)[:limit]
     return [(index, sentence) for _, index, sentence in sorted(top, key=lambda item: item[1])]
-
-
-def predict_transformer_batch(name: str, texts: list[str]) -> list[dict[str, float]] | None:
-    bundle = load_transformer(name)
-    if bundle is None or not texts:
-        return None
-    tokenizer, model, id2label = bundle
-    import torch
-
-    inputs = tokenizer(texts, return_tensors="pt", truncation=True, max_length=MAX_LENGTH, padding=True)
-    device = getattr(model, "device", None)
-    if device is not None:
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-    with torch.no_grad():
-        logits = model(**inputs).logits
-    rows = torch.softmax(logits, dim=-1).tolist()
-    return [
-        {id2label.get(i, ID2LABEL_FALLBACK[i]): float(p) for i, p in enumerate(row)}
-        for row in rows
-    ]
 
 
 def score_article(title: str, paragraphs: list[str]) -> dict | None:
@@ -3722,12 +3781,18 @@ def score_article(title: str, paragraphs: list[str]) -> dict | None:
     body_words = " ".join(paragraphs).split()
     prefix = f"{title.strip()}. " if title and title.strip() else ""
     full_text = prefix + " ".join(body_words)
-    chunks = [
-        prefix + " ".join(body_words[start:start + ARTICLE_CHUNK_WORDS])
+    raw_chunks = [
+        prefix + " ".join(body_words[start : start + ARTICLE_CHUNK_WORDS])
         for start in range(0, len(body_words), ARTICLE_CHUNK_WORDS)
-    ][:ARTICLE_MAX_CHUNKS]
-    if not chunks and full_text:
+    ]
+    if not raw_chunks and full_text:
         chunks = [full_text]
+    elif len(raw_chunks) <= ARTICLE_MAX_CHUNKS:
+        chunks = raw_chunks
+    else:
+        # Sample representative chunks: beginning (intro), middle (body), end (conclusion)
+        mid_idx = len(raw_chunks) // 2
+        chunks = [raw_chunks[0], raw_chunks[mid_idx], raw_chunks[-1]]
 
     votes: list[dict] = []
     for model_name in MODEL_ORDER:
@@ -3834,42 +3899,46 @@ def assess_url_risk(article_result: dict, claim_rows: list[dict], domain_cred: d
 
 def analyse_article(article: dict, primary_model: str) -> dict:
     paragraphs = article["paragraphs"]
-    progress = st.progress(0.0, text="Scoring the full article with all models...")
+    progress = st.progress(0.15, text="Analyzing article context with clinical models...")
     article_result = score_article(article.get("title", ""), paragraphs)
     if article_result is None:
         progress.empty()
         raise ValueError("No model files were available to analyse the article.")
 
+    progress.progress(0.45, text="Extracting and auditing key health claims...")
     sentences = split_sentences(paragraphs)
     claims = candidate_claims(sentences)
     claim_rows: list[dict] = []
-    for position, (index, sentence) in enumerate(claims, start=1):
-        progress.progress(position / (len(claims) + 1), text=f"Auditing claim {position}/{len(claims)}...")
-        result = predict_ensemble(sentence)
-        if result is None:
-            continue
-        _, _, _, votes = result
-        selected, selected_model, _, verified_reason = select_decision_vote(votes, primary_model, sentence)
-        if selected is None:
-            continue
-        label = str(selected.get("label", ""))
-        available = [vote for vote in votes if vote.get("available")]
-        claim_rows.append(
-            {
-                "position": index + 1,
-                "claim": sentence,
-                "verdict": label.title(),
-                "confidence": round(float(selected.get("confidence", 0.0)), 4),
-                "agreement": f"{sum(vote.get('label') == label for vote in available)}/{len(available)}",
-                "decision_model": selected_model,
-                "safety_check": misinformation_safety_reason(sentence) or "",
-                "note": verified_reason or "",
-            }
-        )
-    progress.empty()
+    if claims:
+        claim_texts = [sent for _, sent in claims]
+        batch_results = predict_ensemble_batch(claim_texts)
+        for (index, sentence), result in zip(claims, batch_results):
+            if result is None:
+                continue
+            _, _, _, votes = result
+            selected, selected_model, _, verified_reason = select_decision_vote(votes, primary_model, sentence)
+            if selected is None:
+                continue
+            label = str(selected.get("label", ""))
+            available = [vote for vote in votes if vote.get("available")]
+            claim_rows.append(
+                {
+                    "position": index + 1,
+                    "claim": sentence,
+                    "verdict": label.title(),
+                    "confidence": round(float(selected.get("confidence", 0.0)), 4),
+                    "agreement": f"{sum(vote.get('label') == label for vote in available)}/{len(available)}",
+                    "decision_model": selected_model,
+                    "safety_check": misinformation_safety_reason(sentence) or "",
+                    "note": verified_reason or "",
+                }
+            )
 
+    progress.progress(0.90, text="Finalizing credibility and fact-check reports...")
     scope_text = " ".join([article.get("title", ""), article.get("description", "")] + paragraphs[:3])
     domain_cred = evaluate_domain_credibility(article.get("domain", ""))
+    risk = assess_url_risk(article_result, claim_rows, domain_cred=domain_cred)
+    progress.empty()
     return {
         "article": {
             **{
@@ -3941,6 +4010,7 @@ def render_article_heatmap(paragraphs: list[str], claims: list[dict]) -> str:
     )
 
 
+@st.cache_data(show_spinner=False)
 def generate_pdf_fact_check_report(report: dict) -> bytes:
     import io
     import textwrap
@@ -4253,6 +4323,22 @@ def render_url_report(report: dict) -> None:
                 key="url_download_pdf",
                 use_container_width=True,
             )
+    else:
+        st.info(
+            "ℹ️ **No standalone clinical claims detected:** The analyzed text does not contain distinct "
+            "medical treatment, disease etiology, or health outcome claims (e.g., it may consist of "
+            "bibliographic citations, methodology notes, or non-clinical background). The evaluation above "
+            "reflects the general article-level context."
+        )
+        pdf_bytes = generate_pdf_fact_check_report(report)
+        st.download_button(
+            "📄 Download Fact-Check Report (PDF)",
+            pdf_bytes,
+            file_name="ClaimCheckAI_FactCheck_Audit.pdf",
+            mime="application/pdf",
+            key="url_download_pdf_empty",
+            use_container_width=True,
+        )
 
 
 def url_analysis_tab() -> None:
