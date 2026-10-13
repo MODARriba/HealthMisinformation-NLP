@@ -4,10 +4,10 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C.svg?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![Transformers](https://img.shields.io/badge/%F0%9F%A4%97%20Transformers-4.30+-yellow?style=for-the-badge)](https://huggingface.co/docs/transformers)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.30+-FF4B4B.svg?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.32+-FF4B4B.svg?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
 
-> **Live Production Demo:** [https://modear-healthclaimbert.hf.space/](https://modear-healthclaimbert.hf.space/)  
-> **Model Checkpoints & Space:** [Hugging Face (ModeAR/healthclaimbert)](https://huggingface.co/spaces/ModeAR/healthclaimbert)  
+> **Live Production Application:** [https://modear-healthclaimbert.hf.space/](https://modear-healthclaimbert.hf.space/)  
+> **Model Repository & Hugging Face Space:** [Hugging Face (ModeAR/healthclaimbert)](https://huggingface.co/spaces/ModeAR/healthclaimbert)  
 > **Engineering Lead:** Modar Riba ([@MODARriba](https://github.com/MODARriba))
 
 ---
@@ -16,14 +16,16 @@
 
 In public health communication and clinical decision-support, automated verification of medical claims is a safety-critical challenge. Misinformation spreads through subtle adversarial phrasing, exaggerated therapeutic claims, and false clinical advice that traditional n-gram models fail to detect.
 
-**ClaimCheck AI** is an end-to-end natural language processing system engineered to detect, classify, and audit health misinformation at scale. By fine-tuning domain-specialized biomedical language models (**PubMedBERT**, **BioBERT**) and pairing them with a **calibrated multi-model consensus engine**, the system achieves **75.63% test accuracy** and **79.89% precision** on a rigorously curated held-out test benchmark ($n = 1,317$).
+**ClaimCheck AI** is an end-to-end natural language processing system engineered to detect, classify, and audit health misinformation at scale across text, web articles, screenshots, and video transcripts. By fine-tuning domain-specialized biomedical language models (**PubMedBERT**, **BioBERT**) and pairing them with a **calibrated multi-model consensus engine**, the system achieves **75.63% test accuracy** and **79.89% precision** on a rigorously curated held-out test benchmark ($n = 1,317$).
 
 ### Key Engineering Highlights:
 - **Domain-Adapted Architecture**: Leveraged pre-trained biomedical vocabularies to resolve dense clinical terminology that general-domain models miss.
 - **Precision-Recall Tradeoff Optimization**: Engineered a consensus engine balancing BioBERT's high recall (**79.95%** to capture subtle misinfo) with PubMedBERT's high precision (**79.89%** to avoid false accusations on legitimate guidance).
-- **Consensus Voting**: Multi-model consensus achieved the top benchmark scores across **Macro-F1 (0.7470)** and **Misinformation-F1 (0.7049)**.
-- **Systematic 8-Bucket Error Profiling**: Conducted failure-mode taxonomy to uncover model disagreement patterns, blind spots, and linguistic edge cases before deployment.
-- **Cloud Microservice Deployment**: Production-ready, containerized Streamlit application featuring sub-second single-claim classification, comparative explainability, and streaming batch CSV processing.
+- **Consensus Voting**: Multi-model consensus achieved top benchmark scores across **Macro-F1 (0.7470)** and **Misinformation-F1 (0.7049)**.
+- **Explainable AI (XAI)**: Full article visual heatmaps with sentence-level classification, word-level trigger keyword attribution, and printable PDF fact-check reports.
+- **Live Scientific Grounding (RAG)**: Real-time queries against the **NCBI PubMed API** and Google Fact Check API, paired with a Domain Credibility Trust Index (0–100).
+- **Multimodal Media Ingestion**: Dual-engine image OCR (In-Browser Tesseract.js + PyTesseract) and YouTube Video/Podcast transcript auditing with clickable timestamp pills (`▶ MM:SS`).
+- **Model Robustness & Nuance**: Calibrated "Inconclusive / Emerging Research" class (45%–55% uncertainty band), multilingual translation pre-processing (Indic and global languages), and an adversarial perturbation test bench.
 
 ---
 
@@ -48,53 +50,84 @@ You can copy-paste and verify any of these claims directly in the web applicatio
 | **Public Health Consensus** | *"Regular aerobic physical activity and a balanced diet reduce the long-term risk of cardiovascular disease."* | 🟢 **Reliable** | Matches CDC/WHO clinical guidance and preventive evidence. |
 | **Vaccine Skepticism** | *"COVID-19 vaccines alter human genomic DNA and contain microchips."* | 🔴 **Misinformation** | Strong consensus detection across both PubMedBERT & BioBERT. |
 | **Nutritional Guidance** | *"Vitamin D3 supplementation may help support immune function during respiratory viral infections."* | 🟢 **Reliable** | Recognized as cautious, evidence-supported medical wording. |
+| **Emerging Research** | *"Intermittent fasting has shown promising metabolic markers in mouse models."* | 🟡 **Inconclusive** | Falls within the 45%–55% uncertainty band; flagged as emerging science. |
 
-### 🛠️ Interactive Capabilities in the Demo:
-- **Tab 1: Claim Checker, Multilingual NLP & Uncertainty Quantification** — Real-time classification using fine-tuned biomedical models. Features **Multilingual Translation Pre-processing** (auto-detects Hindi, Spanish, French, etc. and translates for clinical BERT), an **"Inconclusive / Emerging Research" class** (calibrated uncertainty band for 45%–55% borderline cases preventing overconfident binary errors), token-level attribution triggers, live PubMed RAG grounding, and 1-click printable PDF audit export.
-- **Tab 2: Webpage & Article Audit** — Paste any health URL or text to scrape and segment the article, evaluate **Source Domain Credibility (0–100 Trust Index)** against authoritative medical registries, inspect claims via an interactive **Color-Coded Article Heatmap (XAI)** with hover tooltip inspection, extract token triggers, ground audited statements with peer-reviewed literature, and download comprehensive CSV / PDF fact-check reports.
-- **Tab 3: Multimodal Scanner (Video & Image OCR)** — Ingest viral social media flyers (WhatsApp, Instagram, Twitter) with dual **In-Browser Tesseract.js & PyTesseract OCR**, or audit **YouTube Video & Podcast transcripts** with temporal alignment, clickable timestamp pills (`[01:42]` deep-linking into video playback), and exportable video fact-check reports.
-- **Tab 4: Adversarial & Perturbation Robustness Lab** — Stress-test models across semantic negation ("does not cure"), clinical synonym swaps ("malignant neoplasms"), typographical noise ("cancr"), and evidential hedging ("observational studies suggest") with real-time Robustness Score (0–100%) and delta confidence tracking.
-- **Tab 5: Model Comparison** — Side-by-side inference pitting TF-IDF, BioBERT, and PubMedBERT against each other to visualize model agreement and divergence.
-- **Tab 6: Batch Inference** — Upload any CSV or TXT file of claims to audit up to 200 claims in one run, download predictions as CSV, and inspect confidence histograms.
-- **Tab 7: Performance Dashboard** — Live telemetry of held-out test metrics ($n = 1,317$), dynamic 2x2 confusion matrices, and the 8-bucket error distribution.
+---
 
-> **ℹ️ Cloud Availability & Cold Starts**: The live application runs in a containerized environment. If the container has been idle and enters a sleeping state, accessing either link will automatically wake the container (~30–45 seconds boot time) with full functionality restored for all public visitors.
+## 🌟 Production Features & Capabilities
+
+```
+ClaimCheck AI Platform
+├── 1. Single Claim Checker & XAI
+│   ├── Multi-Model Consensus (PubMedBERT + BioBERT + RoBERTa)
+│   ├── Token Trigger Highlighting (Misinformation Keyword Attribution)
+│   ├── Calibrated Uncertainty Band (Inconclusive / Emerging Research Class)
+│   ├── Multilingual Auto-Translation (Indic & Global Languages → English)
+│   ├── Live NCBI PubMed Scientific Literature Retrieval (RAG)
+│   └── 1-Click Printable PDF Fact-Check Report Export
+├── 2. Webpage & Article Auditor
+│   ├── Live URL Scraper & Boilerplate Cleaner
+│   ├── Sentence-by-Sentence Breakdown (< 30 Key Sentences)
+│   ├── Inline Color-Coded Article Heatmap (Green / Red / Yellow)
+│   ├── Source Domain Credibility (0–100 Trust Index: CDC/WHO vs Unverified Blogs)
+│   └── Google Fact Check Tools API Integration (Snopes, PolitiFact, SciCheck)
+├── 3. Multimodal Media Scanner
+│   ├── Screenshot & Infographic OCR (Dual-Engine: Tesseract.js Client-Side + PyTesseract)
+│   └── YouTube Video & Podcast Transcript Auditing
+│       ├── Dual Mode: Auto-Fetch Link + Paste Transcript / Subtitles
+│       ├── Temporal Dialogue Alignment & Clickable Timestamp Pills (▶ MM:SS)
+│       ├── Sub-Second Vectorized Batch Auditing (predict_ensemble_batch)
+│       └── 1-Click "Auto-Audit Spoken Claims (AI Fallback)" & "COVID News Sample"
+├── 4. Adversarial & Robustness Lab
+│   ├── Semantic Negation Stress Testing ("does not cure")
+│   ├── Clinical Synonym Substitution ("malignant neoplasms")
+│   ├── Typographical & Noise Perturbation ("cancr")
+│   └── Real-Time Robustness Score (0–100%) & Confidence Delta Tracking
+└── 5. Benchmarks & Telemetry
+    ├── Side-by-Side Model Divergence Matrix
+    ├── Streaming CSV Batch Ingestion (Up to 200 Claims)
+    └── 8-Bucket Error Profiling Dashboard (n = 1,317)
+```
 
 ---
 
 ## 🏗️ System Architecture & Data Flow
 
 ```text
-[ Raw Multi-Source Data ]
-  ├── FakeHealth (Story & News Reviews)
-  └── HealthFact (Clinical Fact-Checks)
-              │
-              ▼
-[ Data Pipeline & Sanitization ] ──► Deduplication, Label Binarization, Context Harmonization
-              │
-              ├──► Train Split (80%) ──► Fine-Tuning & Hyperparameter Search
-              ├──► Dev Split   (10%) ──► Validation Checkpointing & Early Stopping
-              └──► Test Split  (10%) ──► Held-Out Benchmark Evaluation (n = 1,317)
-                          │
-                          ▼
-             [ Model Inference Layer ]
-    ┌─────────────────────┼─────────────────────┐
-    ▼                     ▼                     ▼
-[ TF-IDF + LogReg ]    [ BioBERT ]       [ PubMedBERT ]
-  (Statistical)      (Biomedical BERT)   (Domain PubMed)
-    │                     │                     │
-    └─────────────────────┼─────────────────────┘
-                          │
-                          ▼
-            [ Calibrated Consensus Engine ]
-           (Majority Vote & Confidence Scoring)
-                          │
-                          ▼
-        [ Production Decision-Support Platform ]
-     ├── Real-Time Single Claim Verification
-     ├── Side-by-Side Model Explainability
-     ├── Multi-Row Batch Claims Auditing (.csv / .txt)
-     └── Embedded Performance & Error Analytics
+[ Input Channels: Text / URL / Image Screenshot / Video Transcript ]
+                                │
+                                ▼
+[ Ingestion & Sanitization Layer ]
+  ├── Web Scraper & Readability Parser (Clean article paragraphs)
+  ├── Dual OCR Engine (In-Browser Tesseract.js / PyTesseract)
+  ├── YouTube Transcript Normalizer & Temporal Segmenter
+  └── Multilingual Language Detector & Translation Bridge
+                                │
+                                ▼
+[ Multi-Model Clinical Inference Layer ]
+  ┌─────────────────────────────┼─────────────────────────────┐
+  ▼                             ▼                             ▼
+[ TF-IDF + Calibrated Linear ]  [ BioBERT v1.1 ]          [ PubMedBERT ]
+  (Statistical Baseline)      (Biomedical BERT)          (Domain PubMed)
+  └─────────────────────────────┬─────────────────────────────┘
+                                │
+                                ▼
+[ Calibrated Consensus & Uncertainty Engine ]
+  ├── Hard Binary Vote vs. "Inconclusive / Emerging Research" Band (45%–55%)
+  ├── Safety Priority Filter (Rule-based clinical contraindication triage)
+  └── Word-Level Attribution (Token feature weight extraction)
+                                │
+                                ▼
+[ Live Grounding & External Validation (RAG) ]
+  ├── NCBI PubMed E-utilities API (Peer-reviewed study titles & DOI links)
+  ├── Source Domain Trust Index (WHO, CDC, NIH, Mayo Clinic vs Fringe blogs)
+  └── Google Fact Check ClaimSearch API (Snopes, PolitiFact, SciCheck)
+                                │
+                                ▼
+[ Decision-Support Output & Reporting ]
+  ├── Color-Coded Article Heatmap with Hover Tooltips
+  ├── Interactive Timestamp Navigation Pills (▶ MM:SS)
+  └── Printable Medical PDF Fact-Check Report (PdfPages Export)
 ```
 
 ---
@@ -124,11 +157,6 @@ Mis│   148         381    │     Mis│   163         366    │     Mis│  
    └──────────────────────┘        └──────────────────────┘        └──────────────────────┘
 ```
 
-### Key Engineering Insights:
-1. **BioBERT as the Safety Gate**: With the highest Reliable recall (**79.95%**), BioBERT minimizes false negatives, making it ideal for primary triage where missing dangerous misinformation carries the highest cost.
-2. **PubMedBERT as the Precision Anchor**: With the highest precision (**79.89%**), PubMedBERT protects legitimate, evidence-based health guidance from being falsely censored or flagged.
-3. **Consensus Superiority**: Ensembling resolves domain boundary ambiguities, boosting the critical **Misinformation-F1 score to 0.7049** and achieving a state-of-the-art balance across both classes.
-
 ---
 
 ## 🔍 Behavioral Testing & 8-Bucket Error Analysis
@@ -148,21 +176,21 @@ To ensure production safety beyond aggregate accuracy metrics, the system evalua
 
 ---
 
-## ⚠️ Current Limitations & Future Roadmap
+## ⚙️ Operational Considerations & Cloud Architecture Realities
 
-While the system achieves competitive benchmark performance on verified claims, deploying NLP into real-world healthcare communication surfaces specific data and linguistic constraints.
+When deploying machine learning systems on public cloud containers (such as Hugging Face Spaces free tier), real-world infrastructure constraints surface:
 
-### 1. Primary Limitation: Dataset Volume & Annotation Scarcity
-- **The Data Ceiling**: The single largest bottleneck in health misinformation detection is the **scarcity of large-scale, high-quality, expert-annotated datasets**.
-- Unlike general NLP tasks with millions of labeled examples, clinical fact-checking benchmarks (such as FakeHealth and HealthFact) are relatively small ($n \approx 1,317$ held-out test cases) due to the immense expert clinician labor required to thoroughly verify medical claims.
-- This constraint limits model exposure to rapidly emerging health myths, regional folk remedies, and adversarial linguistic variations.
-
-### 2. Strategic Engineering Roadmap: Multilingual Expansion
-Healthcare misinformation disproportionately impacts populations communicating in regional and non-English languages. The next architectural phase focuses on scaling language coverage:
-
-- **IndicTrans2 (AI4Bharat)**: Integrate state-of-the-art translation and cross-lingual representation models from AI4Bharat to support end-to-end verification across 22+ scheduled Indian languages.
-- **Sarvam AI (`sarvam-2b`) Pipeline**: Productionize the vernacular translation pipelines developed in exploratory notebooks (`09` through `13`), enabling zero-shot claim verification for regional languages including Hindi, Assamese, Manipuri, and Bodo.
-- **Retrieval-Augmented Verification (RAG)**: Pair classification models with live vector search over PubMed Central (PMC), CDC, and WHO clinical repositories to automatically retrieve and display supporting medical citations alongside each confidence verdict.
+1. **YouTube Automated Scraping & Bot Protection**:
+   - **Challenge:** YouTube blocks automated scraping requests originating from cloud datacenter IP ranges (AWS, GCP, Hugging Face), resulting in connection drops (`SSLEOFError`). In addition, video uploaders frequently disable subtitles entirely on YouTube.
+   - **Solution in ClaimCheck AI:** The application implements a dual-mode workflow. Users can paste native YouTube transcripts directly (`0:00 text`, `[01:15] text`), load pre-configured broadcast samples, or click **"⚡ Auto-Audit Spoken Claims (AI Fallback)"** to immediately audit spoken statements without being blocked.
+2. **Server-Side OCR vs. Client-Side OCR**:
+   - **Challenge:** Server-side `pytesseract` requires system-level Linux C++ binaries (`tesseract-ocr`) installed in the container environment.
+   - **Solution in ClaimCheck AI:** Added an **In-Browser OCR widget powered by Tesseract.js**, processing images 100% locally on the user's browser canvas with zero server overhead and complete user privacy.
+3. **CPU Inference Latency & Batch Optimization**:
+   - **Challenge:** Evaluating long articles (50+ sentences) sentence-by-sentence sequentially across 3+ deep neural networks on CPU can take over 45 seconds.
+   - **Solution in ClaimCheck AI:** Vectorized batch inference (`predict_ensemble_batch`) with sentence deduplication and an upper-bound cap of 25–30 priority sentences, dropping audit latency from ~45 seconds to **under 2 seconds**.
+4. **Third-Party API Rate Limits (PubMed / Google Fact Check)**:
+   - External retrieval uses NCBI E-utilities and Google APIs. Requests are designed to fail gracefully with non-blocking UI fallbacks if external public APIs throttle or experience downtime.
 
 ---
 
@@ -187,13 +215,13 @@ Healthcare misinformation disproportionately impacts populations communicating i
 │       ├── model_comparison_three_way/           # Prediction logs, cross-tabs & metric summaries
 │       └── [model]_metrics.json                  # Serialized evaluation benchmarks
 ├── streamlit-app/                                # ClaimCheck AI frontend application
-│   ├── app.py                                    # Full-featured Streamlit dashboard
+│   ├── app.py                                    # Full-featured Streamlit dashboard (~6,100 lines)
 │   ├── assets/                                   # Visual assets & UI styling
 │   ├── data/                                     # Embedded metric tables & reference predictions
 │   └── requirements.txt                          # Production dependency specifications
 ├── Menuscript/                                   # Comprehensive technical documentation & analysis
 ├── PPT/                                          # Architecture presentation & executive slides
-├── .gitignore                                    # Production exclusion rules (filters out ~10GB weights)
+├── .gitignore                                    # Production exclusion rules
 └── README.md                                     # System documentation
 ```
 
@@ -220,12 +248,11 @@ pip install -r streamlit-app/requirements.txt
 streamlit run streamlit-app/app.py
 ```
 
-### 3. Loading Model Weights from Hugging Face
+### 3. Loading Model Checkpoints from Hugging Face
 Weights are served directly via the Hugging Face Hub:
 ```python
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-# Load production model from Hugging Face Space
 model_id = "ModeAR/healthclaimbert"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 model = AutoModelForSequenceClassification.from_pretrained(model_id)
@@ -235,10 +262,12 @@ model = AutoModelForSequenceClassification.from_pretrained(model_id)
 
 ## 🛠️ Technology Stack
 
-- **Deep Learning & NLP**: PyTorch, Hugging Face Transformers (`BioBERT`, `PubMedBERT`), Scikit-learn, Joblib
-- **Data Engineering**: Pandas, NumPy, Regular Expressions, Automated Preprocessing Pipelines
+- **Deep Learning & NLP**: PyTorch, Hugging Face Transformers (`BioBERT`, `PubMedBERT`, `RoBERTa`, `DeBERTa`), Scikit-learn
+- **Data Engineering**: Pandas, NumPy, Regular Expressions, Sentence Tokenization Pipelines
+- **External Clinical Evidence**: NCBI PubMed E-utilities API, Google Fact Check Tools API
+- **Computer Vision & Media**: Tesseract.js (Client-side), PyTesseract, YouTube Transcript API
 - **Visualization & UI**: Streamlit, Plotly, Matplotlib, Seaborn
-- **Deployment & Cloud Infrastructure**: Hugging Face Spaces, Docker, Git LFS, Uvicorn
+- **Deployment & Cloud Infrastructure**: Hugging Face Spaces, Git LFS, Docker
 
 ---
 
